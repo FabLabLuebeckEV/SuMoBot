@@ -284,7 +284,7 @@ void ArenaControlTask(void *pvParameters) {
             stepper.moveTo(100);
         } else if (receivedString == "down") {
             stepper.moveTo(STEPS_TO_DOWN);
-        } else if (receivedString == "stop") {
+        } else if (receivedString == "stopM") {
             stepper.stop();
         } else if (receivedString.startsWith("speed")) {
             currentSpeed = receivedString.substring(6).toInt();
@@ -296,6 +296,10 @@ void ArenaControlTask(void *pvParameters) {
             }
             stepper.stop();
             stepper.setCurrentPosition(0);
+        } else if (receivedString == "start") {
+            startMatch();
+        } else if (receivedString == "stop") {
+            stopMatch();
         }
     }
     delay(1);
@@ -371,7 +375,7 @@ void setup() {
         request->send(200, "text/plain", "Motor nach unten");
     });
 
-    server.on("/stop", HTTP_GET, [](AsyncWebServerRequest *request) {
+    server.on("/stopM", HTTP_GET, [](AsyncWebServerRequest *request) {
         stepper.stop();
         request->send(200, "text/plain", "Motor gestoppt");
     });
