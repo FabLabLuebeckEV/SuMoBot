@@ -11,22 +11,21 @@
 #define STEP_PIN 17         // Step-Pin
 #define DIR_PIN 16          // Richtungs-Pin
 #define ENDSTOP_PIN 14      // Endstop Pin, with external Pullup
-#define POLLER_SESNOR_PIN 33       // Poller-Sensor-Pin
 #define STEPS_TO_DOWN -25000
 #define POSITION_UP -100
-#define POLLER_SENSOR_PIN 36 // Sensor für den Poller
-#define STEPPER_SPEED 25000  // Geschwindigkeit des Steppers
+#define POLLER_SESNOR_PIN 36 // Sensor für den Poller
+#define STEPPER_SPEED 25000.0f  // Geschwindigkeit des Steppers
 #define STEPPER_ACCELERATION 2000 // Beschleunigung des Steppers
 
 // Definition der Pins und LED-Anzahlen
 #define WLED_PIN_RUNDUM_LEUCHTE 25
 #define NUM_LEDS_RUNDUM_LEUCHTE 8
 
-#define WLED_PIN_POLLER_STATUS 27
+#define WLED_PIN_POLLER_STATUS 25
 #define NUM_LEDS_POLLER_STATUS 50
 
 #define WLED_PIN_ARENA 26
-#define NUM_LEDS_ARENA 150
+#define NUM_LEDS_ARENA 300
 
 // LED-Arrays
 CRGB leds_rundum[NUM_LEDS_RUNDUM_LEUCHTE];
@@ -78,6 +77,7 @@ void startMatch() {
     // Starte die Animation
     animationToRun = COUNTDOWN_ANIMATION;
     stepper.moveTo(POSITION_UP);
+    Serial.println("Match gestartet");
 }
 
 // Stop Match
@@ -85,6 +85,7 @@ void stopMatch() {
     // Starte die Animation
     animationToRun = ARENA_STOP_ANIMATION;
     stepper.moveTo(STEPS_TO_DOWN);
+    Serial.println("Match gestoppt");
 }
 
 void runStopAnimation() {
@@ -218,6 +219,7 @@ void LEDAnimationTask(void *pvParameters) {
         break;
       case ARENA_STOP_ANIMATION:
         runStopAnimation();
+        animationToRun = KEINE_ANIMATION;
         break;
       default:
         vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -241,7 +243,7 @@ void ArenaControlTask(void *pvParameters) {
         pollerUpFlag = false;
         stepper.stop();
         stepper.setCurrentPosition(0);
-        stepper.moveTo(-100);
+        stepper.moveTo(POSITION_UP);
         Serial.println("Endstop reached (Interrupt)");
     }
 
@@ -258,6 +260,7 @@ void ArenaControlTask(void *pvParameters) {
         stepper.setCurrentPosition(0);
         stepper.move(-100); // Sichere Entfernung vom Endstop
         Serial.println("Endstop reached");
+        Serial.println(stepper.maxSpeed());
     }
 
     // Überprüfe Poller Überfahrung
@@ -266,14 +269,16 @@ void ArenaControlTask(void *pvParameters) {
         animationToRun = POLLER_UEBERFAHRUNG_ANIMATION;
         pollerStartTime = millis();
         pollerTriggered = true;
+        Serial.println("Poller Überfahrung erkannt");
     }
 
     // Wenn Poller Überfahrung erkannt wurde, 3 Sekunden warten und dann Stepper bewegen
     if (pollerTriggered && (millis() - pollerStartTime >= 3000)) {
         // Poller hochfahren
-        stepper.moveTo(100);
+        stepper.moveTo(POSITION_UP);
         stepper.run(); // Dies muss in jedem Loop aufgerufen werden, damit der Motor sich bewegt
         pollerTriggered = false; // Rücksetzen, um zukünftige Aktionen zu ermöglichen
+        Serial.println("Poller hich, da überfahren");
     }
 
     // Serielle Kommunikation
@@ -281,7 +286,7 @@ void ArenaControlTask(void *pvParameters) {
         String receivedString = Serial2.readString();
         Serial.println(receivedString);
         if (receivedString == "up") {
-            stepper.moveTo(100);
+            stepper.moveTo(POSITION_UP);
         } else if (receivedString == "down") {
             stepper.moveTo(STEPS_TO_DOWN);
         } else if (receivedString == "stopM") {
@@ -313,20 +318,27 @@ void loop() {
 
 void setup() {
     pinMode(ENDSTOP_PIN, INPUT_PULLUP);
-    pinMode(POLLER_SENSOR_PIN, INPUT);
+    pinMode(POLLER_SESNOR_PIN, INPUT);
     pinMode(POLLER_EN, OUTPUT);
     digitalWrite(POLLER_EN, LOW);
-    // Setup Poller Sensor Pin
-    pinMode(POLLER_SESNOR_PIN, INPUT);
 
     // Seriellen Monitor starten
     Serial.begin(115200);
+    while (!Serial) {
+        delay(10);
+    }
+    
     Serial2.begin(115200, SERIAL_8N1, 9, 10);
 
     // WLED starten
-    FastLED.addLeds<WS2812B, WLED_PIN_RUNDUM_LEUCHTE, GRB>(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE);
-    FastLED.addLeds<WS2812B, WLED_PIN_ARENA, GRB>(leds_arena, NUM_LEDS_ARENA);
-    FastLED.addLeds<WS2812B, WLED_PIN_POLLER_STATUS, GRB>(leds_poller, NUM_LEDS_POLLER_STATUS);
+    FastLED.addLeds<WS2812B, WLED_PIN_RUNDUM_LEUCHTE, RGB>(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE);//,  RGB>(leds_poller, NUM_LEDS_POLLER_STATUS, NUM_LEDS_RUNDUM_LEUCHTE)
+    FastLED.addLeds<WS2812B, WLED_PIN_ARENA, RGB>(leds_arena, NUM_LEDS_ARENA);
+    //FastLED.addLeds<WS2812B, WLED_PIN_POLLER_STATUS, GRB>(leds_poller, NUM_LEDS_POLLER_STATUS);
+    // Alle streifen an auf blau
+    fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Blue);
+    fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Blue);
+    fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Blue);
+    FastLED.show();
 
     // WLAN starten
     WiFi.begin(ssid, password);
@@ -348,7 +360,7 @@ void setup() {
     stepper.setAcceleration(STEPPER_ACCELERATION);
 
     // Interrupt für Poller
-    attachInterrupt(digitalPinToInterrupt(POLLER_SENSOR_PIN), pollerUp, FALLING);
+    attachInterrupt(digitalPinToInterrupt(ENDSTOP_PIN), pollerUp, FALLING);
 
     // Routen für Webserver definieren
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -378,14 +390,6 @@ void setup() {
     server.on("/stopM", HTTP_GET, [](AsyncWebServerRequest *request) {
         stepper.stop();
         request->send(200, "text/plain", "Motor gestoppt");
-    });
-
-    server.on("/speed", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if (request->hasParam("value")) {
-            currentSpeed = request->getParam("value")->value().toInt();
-            stepper.setSpeed(currentSpeed);
-        }
-        request->send(200, "text/plain", "Geschwindigkeit gesetzt");
     });
 
     server.on("/start", HTTP_GET, [](AsyncWebServerRequest *request) {
