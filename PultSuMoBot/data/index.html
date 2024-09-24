@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stepper Motor Steuerung</title>
+    <link rel="stylesheet" type="text/css" href="style.css">
+</head>
+<body>
+    <h1>Stepper Motor Steuerung</h1>
+    <div class="container">
+        <button onclick="sendCommand('up')">Hoch</button>
+        <button onclick="sendCommand('stop')">Stopp</button>
+        <button onclick="sendCommand('down')">Runter</button>
+
+        <br><br>
+        <label for="speed">Geschwindigkeit:</label>
+        <input type="range" id="speed" min="0" max="1000" value="0" oninput="setSpeed(this.value)">
+        <span id="speedValue">0</span>
+    </div>
+
+    <script>
+        function sendCommand(command) {
+            fetch('/' + command)
+                .then(response => response.text())
+                .then(data => console.log(data));
+        }
+
+        function setSpeed(value) {
+            document.getElementById('speedValue').innerText = value;
+            fetch('/speed?value=' + value)
+                .then(response => response.text())
+                .then(data => console.log(data));
+        }
+    </script>
+</body>
+</html>
