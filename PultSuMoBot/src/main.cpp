@@ -21,11 +21,15 @@
 34 in Button Der Poller
 36 in Button The Count*/
 
+// Pin-Definitionen Serial
+#define RXD2 35
+#define TXD2 33
+
 // Pin-Definitionen
 //INputs
 #define START_STOP_PIN 4        // Enable Pin for the Poller (in Button Switch )
-#define BUTTON_POLLER 34        // Button Der Poller
-#define BUTTON_COUNT 36         // Button The Count
+#define BUTTON_POLLER 39        // Button Der Poller
+#define BUTTON_COUNT 34         // Button The Count
 
 // HD44780 LCD über i2c
 #define addr 0x27
@@ -58,44 +62,66 @@ long currentFightStartTime = 0;
 long buttonPollerChanges = 0;
 long buttonCountChange = 0;
 
+// init W5500
+void initW5500() {
+    pinMode(ETH_RST, OUTPUT);
+    digitalWrite(ETH_RST, LOW);
+    delay(100);
+    digitalWrite(ETH_RST, HIGH);
+    delay(100);
+}
+
 // Start Match
 void startMatch() {
     Serial2.println("start");
+    Serial.println("start");
+    lcd.setCursor(0, 2);
+    lcd.print("start");
     currentFightStartTime = millis();
 }
 
 // Stop Match
 void stopMatch() {
     Serial2.println("stop");
+    Serial.println("stop");
+    lcd.setCursor(0, 2);
+    lcd.print("stop");
     currentFightStartTime = 0;
 }
 
 // count down
 void countDown() {
+    lcd.setCursor(0, 2);
+    lcd.print("count");
     Serial2.println("count");
+    Serial.println("count");
 }
 
 // Poller bewegen
 void movePoller() {
+    lcd.setCursor(0, 2);
+    lcd.print("poller");
     Serial2.println("poller");
+    Serial.println("poller");
 }
 
 // Check Buttons
 void checkButtons() {
     // Großer Roter Knopf
-    if (digitalRead(START_STOP_PIN) == LOW && currentFightStartTime == 0) {
+    if (digitalRead(START_STOP_PIN) == LOW && currentFightStartTime == 0) {// entprellen
         startMatch();
+        delay(100);
     } else if (digitalRead(START_STOP_PIN) == LOW && currentFightStartTime != 0 && millis() - currentFightStartTime >= 3000) { // 3 Sekunden delay zwischen start und ende
         stopMatch();
     }
     // Der Poller
     if (digitalRead(BUTTON_POLLER) == LOW && millis() - buttonPollerChanges >= 3000) {
-        buttonCountChange = millis();
+        buttonPollerChanges = millis();
         movePoller();
     }
     // The Count
     if (digitalRead(BUTTON_COUNT) == LOW && millis() - buttonCountChange >= 3000) {
-        buttonPollerChanges = millis();
+        buttonCountChange = millis();
         countDown();
     }
 }
@@ -107,12 +133,23 @@ void loop() {
     }
 
     // Ausgabe in Minuten und Sekunden
-    Serial.println((FIGHT_DURATION - (millis() - currentFightStartTime)) / 60000 + ":" + ((FIGHT_DURATION - (millis() - currentFightStartTime)) % 60000) / 1000);
+    Serial.print((FIGHT_DURATION - (millis() - currentFightStartTime)) / 60000);
+    Serial.print(":");
+    Serial.println(((FIGHT_DURATION - (millis() - currentFightStartTime)) % 60000) / 1000);
     // Ausgabe auf dem display
     lcd.setCursor(0, 0);
     lcd.print("Verbleibende Zeit:");
     lcd.setCursor(0, 1);
-    lcd.print((FIGHT_DURATION - (millis() - currentFightStartTime)) / 60000 + ":" + ((FIGHT_DURATION - (millis() - currentFightStartTime)) % 60000) / 1000);
+    if (currentFightStartTime == 0) {
+        lcd.print("00:00");
+    } else {
+        // clear the line
+        lcd.print("                ");
+        lcd.setCursor(0, 1);
+    lcd.print((FIGHT_DURATION - (millis() - currentFightStartTime)) / 60000);
+    lcd.print(":");
+    lcd.print(((FIGHT_DURATION - (millis() - currentFightStartTime)) % 60000) / 1000);
+    }
     // Buttons prüfen
     checkButtons();
     delay(100);
@@ -120,7 +157,9 @@ void loop() {
 
 
 void setup() {
-    pinMode(START_STOP_PIN, INPUT_PULLUP);
+    pinMode(START_STOP_PIN, INPUT);
+    pinMode(BUTTON_POLLER, INPUT);
+    pinMode(BUTTON_COUNT, INPUT);
     // initialize LCD
     lcd.init();
     // turn on LCD backlight                      
@@ -128,7 +167,7 @@ void setup() {
     
     // Seriellen  Monitor starten
     Serial.begin(115200);
-    Serial2.begin(115200, SERIAL_8N1, 9, 10);
+    Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
 
     // WLAN starten
     WiFi.begin(ssid, password);
