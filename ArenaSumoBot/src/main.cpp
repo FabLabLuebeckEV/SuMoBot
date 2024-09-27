@@ -6,6 +6,11 @@
 // WLED FastLED
 #include <FastLED.h>
 
+/*27    Out     5    UART TX
+32    In    5    UART RX*/
+#define RX2 32
+#define TX2 27
+
 // Pin-Definitionen
 #define POLLER_EN 13        // Enable Pin for the Poller
 #define STEP_PIN 17         // Step-Pin
@@ -354,7 +359,7 @@ void setup() {
         delay(10);
     }
     
-    Serial2.begin(115200, SERIAL_8N1, 9, 10);
+    Serial2.begin(115200, SERIAL_8N1, RX2, TX2);
 
     // WLED starten
     FastLED.addLeds<WS2812B, WLED_PIN_RUNDUM_LEUCHTE, RGB>(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE);//,  RGB>(leds_poller, NUM_LEDS_POLLER_STATUS, NUM_LEDS_RUNDUM_LEUCHTE)
