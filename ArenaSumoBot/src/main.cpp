@@ -11,18 +11,18 @@
 #define STEP_PIN 17         // Step-Pin
 #define DIR_PIN 16          // Richtungs-Pin
 #define ENDSTOP_PIN 14      // Endstop Pin, with external Pullup
-#define STEPS_TO_DOWN -25000
-#define POSITION_UP -100
+#define STEPS_TO_DOWN -7200 // -7300 //-29200
+#define POSITION_UP 7500
 #define POLLER_SESNOR_PIN 36 // Sensor für den Poller
-#define STEPPER_SPEED 25000.0f  // Geschwindigkeit des Steppers
+#define STEPPER_SPEED 45000.0f  // Geschwindigkeit des Steppers
 #define STEPPER_ACCELERATION 2000 // Beschleunigung des Steppers
 
 // Definition der Pins und LED-Anzahlen
 #define WLED_PIN_RUNDUM_LEUCHTE 25
 #define NUM_LEDS_RUNDUM_LEUCHTE 8
 
-#define WLED_PIN_POLLER_STATUS 25
-#define NUM_LEDS_POLLER_STATUS 50
+#define WLED_PIN_POLLER_STATUS 4
+#define NUM_LEDS_POLLER_STATUS 60
 
 #define WLED_PIN_ARENA 26
 #define NUM_LEDS_ARENA 300
@@ -107,35 +107,54 @@ void runStopAnimation() {
 }
 
 // Funktion für die Countdown-Animation
-void runCountdownAnimation() {
-  for (int i = 0; i < 3; i++) {
-    // Alle LEDs rot aufleuchten lassen
-    fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Red);
-    fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Red);
-    fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Red);
+void runCountdownAnimation(bool end) {
+  if (!end) {
+    for (int i = 0; i < 3; i++) {
+      // Alle LEDs rot aufleuchten lassen
+      fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Orange);
+      fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Orange);
+      fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Orange);
+      FastLED.show();
+      vTaskDelay(500 / portTICK_PERIOD_MS);
+
+      // LEDs ausschalten
+      fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Black);
+      fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Black);
+      fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Black);
+      FastLED.show();
+      vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
+  }
+
+  if (end) { 
+    for (int i = 0; i < 3; i++) {
+      // Alle LEDs rot aufleuchten lassen
+      fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Red);
+      fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Red);
+      fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Red);
+      FastLED.show();
+      vTaskDelay(500 / portTICK_PERIOD_MS);
+
+      // LEDs ausschalten
+      fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Black);
+      fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Black);
+      fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Black);
+      FastLED.show();
+      vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
+    // Alles schlagartig grün für 2 Sekunden
+    fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Green);
+    fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Green);
+    fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Green);
     FastLED.show();
-    vTaskDelay(500 / portTICK_PERIOD_MS);
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
 
     // LEDs ausschalten
     fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Black);
     fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Black);
     fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Black);
     FastLED.show();
-    vTaskDelay(500 / portTICK_PERIOD_MS);
   }
-
-  // Alles schlagartig grün für 2 Sekunden
-  fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Green);
-  fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Green);
-  fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Green);
-  FastLED.show();
-  vTaskDelay(2000 / portTICK_PERIOD_MS);
-
-  // LEDs ausschalten
-  fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Black);
-  fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Black);
-  fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Black);
-  FastLED.show();
 }
 
 // Hilfsfunktion für die blaue Wellenanimation
@@ -210,16 +229,23 @@ void LEDAnimationTask(void *pvParameters) {
   while (1) {
     switch (animationToRun) {
       case COUNTDOWN_ANIMATION:
-        runCountdownAnimation();
-        animationToRun = KEINE_ANIMATION;  // Reset der Animation
+        runCountdownAnimation(false);
+        if (!stepper.isRunning()) {
+          runCountdownAnimation(true);
+          animationToRun = KEINE_ANIMATION;  // Reset der Animation
+        }
         break;
       case POLLER_UEBERFAHRUNG_ANIMATION:
         runPollerUeberfahrungAnimation();
-        animationToRun = KEINE_ANIMATION;
+        if (!stepper.isRunning()) {
+          animationToRun = KEINE_ANIMATION;
+        }
         break;
       case ARENA_STOP_ANIMATION:
         runStopAnimation();
-        animationToRun = KEINE_ANIMATION;
+        if (!stepper.isRunning()) {
+          animationToRun = KEINE_ANIMATION;
+        }
         break;
       default:
         vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -333,7 +359,7 @@ void setup() {
     // WLED starten
     FastLED.addLeds<WS2812B, WLED_PIN_RUNDUM_LEUCHTE, RGB>(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE);//,  RGB>(leds_poller, NUM_LEDS_POLLER_STATUS, NUM_LEDS_RUNDUM_LEUCHTE)
     FastLED.addLeds<WS2812B, WLED_PIN_ARENA, RGB>(leds_arena, NUM_LEDS_ARENA);
-    //FastLED.addLeds<WS2812B, WLED_PIN_POLLER_STATUS, GRB>(leds_poller, NUM_LEDS_POLLER_STATUS);
+    FastLED.addLeds<WS2812B, WLED_PIN_POLLER_STATUS, GRB>(leds_poller, NUM_LEDS_POLLER_STATUS);
     // Alle streifen an auf blau
     fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Blue);
     fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Blue);
@@ -426,4 +452,6 @@ void setup() {
     &TaskArenaControl,
     1
   );
+
+  stepper.moveTo(POSITION_UP);
 }
