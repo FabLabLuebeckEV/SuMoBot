@@ -4,6 +4,7 @@
 #include <LittleFS.h>
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
+#include <esp_now.h>
 
 /*hier ist die liste des arena-bedienpults:
 16 out Button Led
@@ -22,8 +23,8 @@
 36 in Button The Count*/
 
 // Pin-Definitionen Serial
-#define RXD2 35
-#define TXD2 33
+#define RXD2 16
+#define TXD2 17
 
 // Pin-Definitionen
 //INputs
@@ -49,6 +50,24 @@ LiquidCrystal_I2C lcd(addr, 20, 4);  // set the LCD address to 0x27 for a 16 cha
 // Definition für Arena
 #define FIGHT_DURATION 180000    // Dauer eines Kampfes in ms
 
+// REPLACE WITH YOUR RECEIVER MAC Address
+uint8_t broadcastAddress[] = {0x34, 0x86, 0x5d, 0xfb, 0xe7, 0xe8};
+uint8_t broadcastAddressObs[] = {0x08, 0x3a, 0xf2, 0x37, 0x3c, 0xfc};
+
+// Structure example to send data
+// Must match the receiver structure
+typedef struct struct_message {
+  char message[32];
+} struct_message;
+
+// Create a struct_message called myData
+struct_message myData;
+struct_message myDataRecv;
+struct_message myDataObsSend;
+
+esp_now_peer_info_t peerInfo;
+esp_now_peer_info_t peerInfoObs;
+
 // WLAN-Credentials
 const char *ssid = "fablab";
 const char *password = "fablabfdm";
@@ -61,6 +80,76 @@ long currentFightStartTime = 0;
 // Status Buttons Poller und Count
 long buttonPollerChanges = 0;
 long buttonCountChange = 0;
+
+bool initMatch = false;
+
+// callback when data is sent
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("\r\nLast Packet Send Status:\t");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+// Send data using ESP-NOW
+void sendEspNow(const char* data) {
+  // Set values to send
+  strcpy(myData.message, data);
+  
+  // Send message via ESP-NOW
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
+
+  if (result == ESP_OK) {
+    Serial.println("Sent with success");
+  }
+  else {
+    Serial.println("Error sending the data");
+  }
+}
+
+// Send data using ESP-NOW
+void sendEspNowObs(const char* data) {
+  // Set values to send
+  strcpy(myDataObsSend.message, data);
+  
+  // Send message via ESP-NOW
+  esp_err_t result = esp_now_send(broadcastAddressObs, (uint8_t *) &myDataObsSend, sizeof(myDataObsSend));
+
+  if (result == ESP_OK) {
+    Serial.println("Sent with success");
+  }
+  else {
+    Serial.println("Error sending the data");
+  }
+}
+
+// Callback function that will be executed when data is received
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  memcpy(&myDataRecv, incomingData, sizeof(myData));
+  Serial.print("Bytes received: ");
+  Serial.println(len);
+  Serial.print("Message: ");
+  Serial.println(myDataRecv.message);
+  String msg = String(myDataRecv.message);
+  if (msg == "matchReady") {
+    Serial.println("Match ready");
+    currentFightStartTime = millis();
+    initMatch = false;
+    sendEspNowObs("start");
+  } else if (msg == "matchCountdown") {
+    Serial.println("Match countdown");
+    sendEspNowObs("countdown");
+    // TODO implement
+  }
+}
+
+// Init ESP-NOW
+void initESPNow() {
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  esp_now_register_send_cb(OnDataSent);
+  esp_now_register_recv_cb(OnDataRecv);
+}
 
 // init W5500
 void initW5500() {
@@ -77,7 +166,8 @@ void startMatch() {
     Serial.println("start");
     lcd.setCursor(0, 2);
     lcd.print("start");
-    currentFightStartTime = millis();
+    initMatch = true;
+    sendEspNow("start");
 }
 
 // Stop Match
@@ -87,6 +177,9 @@ void stopMatch() {
     lcd.setCursor(0, 2);
     lcd.print("stop");
     currentFightStartTime = 0;
+    initMatch = false;
+    sendEspNow("stop");
+    sendEspNowObs("stop");
 }
 
 // count down
@@ -95,6 +188,8 @@ void countDown() {
     lcd.print("count");
     Serial2.println("count");
     Serial.println("count");
+    sendEspNow("count");
+    sendEspNow("down");
 }
 
 // Poller bewegen
@@ -103,16 +198,19 @@ void movePoller() {
     lcd.print("poller");
     Serial2.println("poller");
     Serial.println("poller");
+    sendEspNow("poller");
 }
 
 // Check Buttons
 void checkButtons() {
     // Großer Roter Knopf
-    if (digitalRead(START_STOP_PIN) == LOW && currentFightStartTime == 0) {// entprellen
+    if (digitalRead(START_STOP_PIN) == LOW && currentFightStartTime == 0 && !initMatch && millis() - buttonPollerChanges >= 1000) {// entprellen
         startMatch();
         delay(100);
-    } else if (digitalRead(START_STOP_PIN) == LOW && currentFightStartTime != 0 && millis() - currentFightStartTime >= 3000) { // 3 Sekunden delay zwischen start und ende
+        buttonCountChange = millis();
+    } else if (digitalRead(START_STOP_PIN) == LOW && ((currentFightStartTime != 0 && millis() - currentFightStartTime >= 3000) || initMatch) && millis() - buttonPollerChanges >= 1000) { // 3 Sekunden delay zwischen start und ende
         stopMatch();
+        buttonCountChange = millis();
     }
     // Der Poller
     if (digitalRead(BUTTON_POLLER) == LOW && millis() - buttonPollerChanges >= 3000) {
@@ -127,7 +225,6 @@ void checkButtons() {
 }
 
 void loop() {
-    
     if (currentFightStartTime != 0 && millis() - currentFightStartTime >= FIGHT_DURATION) {
         stopMatch();
     }
@@ -155,7 +252,6 @@ void loop() {
     delay(100);
 }
 
-
 void setup() {
     pinMode(START_STOP_PIN, INPUT);
     pinMode(BUTTON_POLLER, INPUT);
@@ -169,14 +265,31 @@ void setup() {
     Serial.begin(115200);
     Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
 
+    WiFi.mode(WIFI_STA);
+
+    // Init ESP-NOW
+    initESPNow();
+
+    // Register peer
+    memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+    peerInfo.channel = 0;  
+    peerInfo.encrypt = false;
+
+    // Add peer        
+    if (esp_now_add_peer(&peerInfo) != ESP_OK){
+        Serial.println("Failed to add peer");
+        ESP.restart();
+        return;
+    }
+
     // WLAN starten
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
+    //WiFI.begin(ssid, password);
+    /*while (//WiFI.status() != WL_CONNECTED) {
         delay(1000);
         Serial.println("Verbindung zum WLAN wird hergestellt...");
-    }
+    }*/
     Serial.println("Mit dem WLAN verbunden!");
-    Serial.println(WiFi.localIP());
+    //Serial.println(//WiFI.localIP());
 
     // LittleFS starten
     if (!LittleFS.begin()) {

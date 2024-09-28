@@ -5,6 +5,7 @@
 #include <LittleFS.h>
 // WLED FastLED
 #include <FastLED.h>
+#include <esp_now.h>
 
 /*27    Out     5    UART TX
 32    In    5    UART RX*/
@@ -31,6 +32,20 @@
 
 #define WLED_PIN_ARENA 26
 #define NUM_LEDS_ARENA 300
+
+// REPLACE WITH YOUR RECEIVER MAC Address
+uint8_t broadcastAddress[] = {0xec, 0x64, 0xc9, 0x90, 0xf9, 0x54};
+
+// Structure example to receive data
+typedef struct struct_message {
+    char message[32];
+} struct_message;
+
+// Create a struct_message called myData
+struct_message myData;
+struct_message myDataSend;
+
+esp_now_peer_info_t peerInfo;
 
 // LED-Arrays
 CRGB leds_rundum[NUM_LEDS_RUNDUM_LEUCHTE];
@@ -93,6 +108,60 @@ void stopMatch() {
     Serial.println("Match gestoppt");
 }
 
+// Callback function that will be executed when data is received
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  memcpy(&myData, incomingData, sizeof(myData));
+  Serial.print("Bytes received: ");
+  Serial.println(len);
+  Serial.print("Message: ");
+  Serial.println(myData.message);
+  String msg = String(myData.message);
+  if (msg == "start") {
+    startMatch();
+  } else if (msg == "stop") {
+    stopMatch();
+  } else if (msg == "up") {
+      stepper.moveTo(POSITION_UP);
+  } else if (msg == "poller") {
+    animationToRun = POLLER_UEBERFAHRUNG_ANIMATION;
+    pollerStartTime = millis();
+    pollerTriggered = true;
+  } else if (msg == "down") {
+      stepper.moveTo(STEPS_TO_DOWN);
+  } else if (msg == "stopM") {
+      stepper.stop();
+  } else if (msg == "callibrate") {
+      stepper.move(5000);
+      while (digitalRead(ENDSTOP_PIN) == HIGH) {
+          stepper.run();
+      }
+      stepper.stop();
+      stepper.setCurrentPosition(0);
+  }
+}
+
+// callback when data is sent
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("\r\nLast Packet Send Status:\t");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+// Send data using ESP-NOW
+void sendEspNow(const char* data) {
+  // Set values to send
+  strcpy(myDataSend.message, data);
+  
+  // Send message via ESP-NOW
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &myDataSend, sizeof(myData));
+
+  if (result == ESP_OK) {
+    Serial.println("Sent with success");
+  }
+  else {
+    Serial.println("Error sending the data");
+  }
+}
+
 void runStopAnimation() {
     for (int i = 0; i < 10; i++) {
     // Alle LEDs rot aufleuchten lassen
@@ -147,6 +216,9 @@ void runCountdownAnimation(bool end) {
       FastLED.show();
       vTaskDelay(500 / portTICK_PERIOD_MS);
     }
+
+    sendEspNow("matchReady");
+
     // Alles schlagartig grün für 2 Sekunden
     fill_solid(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE, CRGB::Green);
     fill_solid(leds_poller, NUM_LEDS_POLLER_STATUS, CRGB::Green);
@@ -267,83 +339,84 @@ void LEDAnimationTask(void *pvParameters) {
 // Arena-Steuerung Task (hier kannst du weitere Animationen implementieren)
 void ArenaControlTask(void *pvParameters) {
     while (true) {
-        stepper.run();
+      stepper.run();
 
-    // Überprüfe, ob der Poller oben ist
-    if (pollerUpFlag) {
-        pollerUpFlag = false;
-        stepper.stop();
-        stepper.setCurrentPosition(0);
-        stepper.moveTo(POSITION_UP);
-        Serial.println("Endstop reached (Interrupt)");
-    }
+      // Überprüfe, ob der Poller oben ist
+      if (pollerUpFlag) {
+          pollerUpFlag = false;
+          stepper.stop();
+          stepper.setCurrentPosition(0);
+          stepper.moveTo(POSITION_UP);
+          Serial.println("Endstop reached (Interrupt)");
+      }
 
-    // Steuere den Enable-Pin des Steppers
-    if (stepper.currentPosition() == stepper.targetPosition()) {
-        digitalWrite(POLLER_EN, HIGH);
-    } else {
-        digitalWrite(POLLER_EN, LOW);
-    }
+      // Steuere den Enable-Pin des Steppers
+      if (stepper.currentPosition() == stepper.targetPosition()) {
+          digitalWrite(POLLER_EN, HIGH);
+      } else {
+          digitalWrite(POLLER_EN, LOW);
+      }
 
-    // Überprüfe den Endstop
-    if (digitalRead(ENDSTOP_PIN) == LOW) {
-        stepper.stop();
-        stepper.setCurrentPosition(0);
-        stepper.move(-100); // Sichere Entfernung vom Endstop
-        Serial.println("Endstop reached");
-        Serial.println(stepper.maxSpeed());
-    }
+      // Überprüfe den Endstop
+      if (digitalRead(ENDSTOP_PIN) == LOW) {
+          stepper.stop();
+          stepper.setCurrentPosition(0);
+          stepper.move(-100); // Sichere Entfernung vom Endstop
+          Serial.println("Endstop reached");
+          Serial.println(stepper.maxSpeed());
+      }
 
-    // Überprüfe Poller Überfahrung
-    if (digitalRead(POLLER_SESNOR_PIN) == LOW && !pollerTriggered && stepper.currentPosition() == stepper.targetPosition()) {
-        // Animation auslösen und Timer starten
-        animationToRun = POLLER_UEBERFAHRUNG_ANIMATION;
-        pollerStartTime = millis();
-        pollerTriggered = true;
-        Serial.println("Poller Überfahrung erkannt");
-    }
+      // Überprüfe Poller Überfahrung
+      if (digitalRead(POLLER_SESNOR_PIN) == LOW && !pollerTriggered && stepper.currentPosition() == stepper.targetPosition()) {
+          // Animation auslösen und Timer starten
+          animationToRun = POLLER_UEBERFAHRUNG_ANIMATION;
+          pollerStartTime = millis();
+          pollerTriggered = true;
+          Serial.println("Poller Überfahrung erkannt");
+      }
 
-    // Wenn Poller Überfahrung erkannt wurde, 3 Sekunden warten und dann Stepper bewegen
-    if (pollerTriggered && (millis() - pollerStartTime >= 3000)) {
-        // Poller hochfahren
-        stepper.moveTo(POSITION_UP);
-        stepper.run(); // Dies muss in jedem Loop aufgerufen werden, damit der Motor sich bewegt
-        pollerTriggered = false; // Rücksetzen, um zukünftige Aktionen zu ermöglichen
-        Serial.println("Poller hich, da überfahren");
-    }
+      // Wenn Poller Überfahrung erkannt wurde, 3 Sekunden warten und dann Stepper bewegen
+      if (pollerTriggered && (millis() - pollerStartTime >= 3000)) {
+          // Poller hochfahren
+          stepper.moveTo(POSITION_UP);
+          stepper.run(); // Dies muss in jedem Loop aufgerufen werden, damit der Motor sich bewegt
+          pollerTriggered = false; // Rücksetzen, um zukünftige Aktionen zu ermöglichen
+          Serial.println("Poller hich, da überfahren");
+      }
 
-    // Serielle Kommunikation
-    if (Serial2.available()) {
-        String receivedString = Serial2.readString();
-        Serial.println(receivedString);
-        if (receivedString == "up") {
-            stepper.moveTo(POSITION_UP);
-        } else if (receivedString == "down") {
-            stepper.moveTo(STEPS_TO_DOWN);
-        } else if (receivedString == "stopM") {
-            stepper.stop();
-        } else if (receivedString.startsWith("speed")) {
-            currentSpeed = receivedString.substring(6).toInt();
-            stepper.setSpeed(currentSpeed);
-        } else if (receivedString == "callibrate") {
-            stepper.move(5000);
-            while (digitalRead(ENDSTOP_PIN) == HIGH) {
-                stepper.run();
-            }
-            stepper.stop();
-            stepper.setCurrentPosition(0);
-        } else if (receivedString == "start") {
-            startMatch();
-        } else if (receivedString == "stop") {
-            stopMatch();
-        }
-    }
-    delay(1);
+      // Serielle Kommunikation
+      if (Serial2.available()) {
+          Serial.println("Available");
+          String receivedString = Serial2.readString();
+          Serial.println(receivedString);
+          if (receivedString == "up") {
+              stepper.moveTo(POSITION_UP);
+          } else if (receivedString == "down") {
+              stepper.moveTo(STEPS_TO_DOWN);
+          } else if (receivedString == "stopM") {
+              stepper.stop();
+          } else if (receivedString.startsWith("speed")) {
+              currentSpeed = receivedString.substring(6).toInt();
+              stepper.setSpeed(currentSpeed);
+          } else if (receivedString == "callibrate") {
+              stepper.move(5000);
+              while (digitalRead(ENDSTOP_PIN) == HIGH) {
+                  stepper.run();
+              }
+              stepper.stop();
+              stepper.setCurrentPosition(0);
+          } else if (receivedString == "start") {
+              startMatch();
+          } else if (receivedString == "stop") {
+              stopMatch();
+          }
+      }
+      delay(1);
     }
 }
 
 void loop() {
-    vTaskDelete(NULL);
+  vTaskDelete(NULL);
 }
 
 
@@ -356,13 +429,13 @@ void setup() {
     // Seriellen Monitor starten
     Serial.begin(115200);
     while (!Serial) {
-        delay(10);
+      delay(10);
     }
     
-    Serial2.begin(115200, SERIAL_8N1, RX2, TX2);
+    Serial2.begin(9600, SERIAL_8N1, RX2, TX2);
 
     // WLED starten
-    FastLED.addLeds<WS2812B, WLED_PIN_RUNDUM_LEUCHTE, RGB>(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE);//,  RGB>(leds_poller, NUM_LEDS_POLLER_STATUS, NUM_LEDS_RUNDUM_LEUCHTE)
+    FastLED.addLeds<WS2812B, WLED_PIN_RUNDUM_LEUCHTE, RGB>(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE); //,  RGB>(leds_poller, NUM_LEDS_POLLER_STATUS, NUM_LEDS_RUNDUM_LEUCHTE)
     FastLED.addLeds<WS2812B, WLED_PIN_ARENA, RGB>(leds_arena, NUM_LEDS_ARENA);
     FastLED.addLeds<WS2812B, WLED_PIN_POLLER_STATUS, GRB>(leds_poller, NUM_LEDS_POLLER_STATUS);
     // Alle streifen an auf blau
@@ -371,14 +444,40 @@ void setup() {
     fill_solid(leds_arena, NUM_LEDS_ARENA, CRGB::Blue);
     FastLED.show();
 
+    // Set device as a Wi-Fi Station
+    WiFi.mode(WIFI_STA);
+    //WiFi.disconnect();
+
+    // Init ESP-NOW
+    if (esp_now_init() != ESP_OK) {
+      Serial.println("Error initializing ESP-NOW");
+      return;
+    }
+
+    // Register for a callback function that will be called when data is received
+    esp_now_register_recv_cb(OnDataRecv);
+    esp_now_register_send_cb(OnDataSent);
+
+    // Register peer
+    memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+    peerInfo.channel = 0;  
+    peerInfo.encrypt = false;
+
+    // Add peer        
+    if (esp_now_add_peer(&peerInfo) != ESP_OK){
+        Serial.println("Failed to add peer");
+        ESP.restart();
+        return;
+    }
+
     // WLAN starten
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
+    //WiFi.begin(ssid, password);
+    /*while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
         Serial.println("Verbindung zum WLAN wird hergestellt...");
-    }
-    Serial.println("Mit dem WLAN verbunden!");
-    Serial.println(WiFi.localIP());
+    }*/
+    //Serial.println("Mit dem WLAN verbunden!");
+    //Serial.println(WiFi.localIP());
 
     // LittleFS starten
     if (!LittleFS.begin()) {
