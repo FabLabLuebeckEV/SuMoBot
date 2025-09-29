@@ -168,6 +168,7 @@ void startMatch() {
     lcd.print("start");
     initMatch = true;
     sendEspNow("start");
+    sendEspNowObs("start_pressed");
 }
 
 // Stop Match
@@ -277,6 +278,18 @@ void setup() {
 
     // Add peer        
     if (esp_now_add_peer(&peerInfo) != ESP_OK){
+        Serial.println("Failed to add peer");
+        ESP.restart();
+        return;
+    }
+
+    // Register peer
+    memcpy(peerInfoObs.peer_addr, broadcastAddressObs, 6);
+    peerInfoObs.channel = 0;  
+    peerInfoObs.encrypt = false;
+
+    // Add peer        
+    if (esp_now_add_peer(&peerInfoObs) != ESP_OK){
         Serial.println("Failed to add peer");
         ESP.restart();
         return;
