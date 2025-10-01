@@ -6,18 +6,14 @@
 // WLED FastLED
 #include <FastLED.h>
 #include <esp_now.h>
-
-/*27    Out     5    UART TX
-32    In    5    UART RX*/
-#define RX2 32
-#define TX2 27
+#include <esp_wifi.h>
 
 // Pin-Definitionen
 #define POLLER_EN 13        // Enable Pin for the Poller
 #define STEP_PIN 17         // Step-Pin
 #define DIR_PIN 16          // Richtungs-Pin
 #define ENDSTOP_PIN 14      // Endstop Pin, with external Pullup
-#define STEPS_TO_DOWN -7200 // -7300 //-29200
+#define STEPS_TO_DOWN -7350 // -7300 //-29200
 #define POSITION_UP 7500
 #define POLLER_SESNOR_PIN 36 // Sensor für den Poller
 #define STEPPER_SPEED 45000.0f  // Geschwindigkeit des Steppers
@@ -33,8 +29,11 @@
 #define WLED_PIN_ARENA 26
 #define NUM_LEDS_ARENA 300
 
-// REPLACE WITH YOUR RECEIVER MAC Address
-uint8_t broadcastAddress[] = {0xec, 0x64, 0xc9, 0x90, 0xf9, 0x54};
+// Schalte WIFI für Debugging ein/aus
+#define WIFI_ON_STARTUP false
+
+// REPLACE WITH YOUR RECEIVER MAC Address ac:15:18:e9:7e:78
+uint8_t broadcastAddress[] = {0xac, 0x15, 0x18, 0xe9, 0x7e, 0x78};
 
 // Structure example to receive data
 typedef struct struct_message {
@@ -51,6 +50,9 @@ esp_now_peer_info_t peerInfo;
 CRGB leds_rundum[NUM_LEDS_RUNDUM_LEUCHTE];
 CRGB leds_poller[NUM_LEDS_POLLER_STATUS];
 CRGB leds_arena[NUM_LEDS_ARENA];
+
+// MAC-Adresse des eigenen Geräts
+static uint8_t SELF_MAC[6];
 
 // Globale Variable zur Steuerung der Animationen
 // ENUM LED_ANIMATION
@@ -87,6 +89,12 @@ bool pollerTriggered = false;
 // Interrupt-Flagge
 volatile bool pollerUpFlag = false;
 
+// Letzte Link-Qualität zum zuletzt gesehenen Peer
+static uint8_t lastPeer[6] = {0};
+static int8_t  lastRSSI = -127;
+static float   emaRSSI  = NAN;    // gleitender Mittelwert
+static uint32_t lastSeenMs = 0;
+
 // ISR: Setzt nur die Flagge
 void IRAM_ATTR pollerUp() {
     pollerUpFlag = true;
@@ -100,6 +108,14 @@ void startMatch() {
     Serial.println("Match gestartet");
 }
 
+// Start DathMatch
+void startDMatch() {
+    // Starte die Animation
+    animationToRun = COUNTDOWN_ANIMATION;
+    stepper.moveTo(STEPS_TO_DOWN);
+    Serial.println("Dath Match gestartet");
+}
+
 // Stop Match
 void stopMatch() {
     // Starte die Animation
@@ -108,37 +124,83 @@ void stopMatch() {
     Serial.println("Match gestoppt");
 }
 
+// Hilfsfunktion: MAC hübsch ausgeben
+String macToString(const uint8_t m[6]) {
+  char buf[18];
+  snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+           m[0], m[1], m[2], m[3], m[4], m[5]);
+  return String(buf);
+}
+
+// dBm → grobe Qualitäts-% (0…100). Kein Standard, aber praxisnah.
+int rssiToQuality(int8_t rssi) {
+  if (rssi <= -100) return 0;
+  if (rssi >=  -50) return 100;
+  return 2 * (rssi + 100);
+}
+
 // Callback function that will be executed when data is received
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  memcpy(&myData, incomingData, sizeof(myData));
+// Neuer ESP-NOW Receive Callback (Arduino-ESP32 v3 / IDF v5)
+void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
+  if (!info || !incomingData || len <= 0) return;
+
+  // Absender-MAC (optional, falls du sie brauchst)
+  const uint8_t *mac = info->src_addr;   // 6 Bytes
+  // int recv_channel = info->recv_channel; // optional: Kanal
+
+  // RSSI in dBm aus dem RX-Control-Block
+  int8_t rssi = info->rx_ctrl->rssi;
+  lastRSSI = rssi;
+  if (isnan(emaRSSI)) emaRSSI = rssi;
+  else                emaRSSI = 0.2f * rssi + 0.8f * emaRSSI;
+  lastSeenMs = millis();
+
+  // Sichere Kopie (begrenzen auf Größe von myData)
+  int copyLen = len < (int)sizeof(myData) ? len : (int)sizeof(myData);
+  memcpy(&myData, incomingData, copyLen);
+
+  Serial.printf("RX %dB von %s, RSSI %d dBm\n", len, macToString(lastPeer).c_str(), rssi);
+
   Serial.print("Bytes received: ");
   Serial.println(len);
+
+  Serial.print("From: ");
+  for (int i = 0; i < 6; ++i) {
+    if (i) Serial.print(':');
+    Serial.print(mac[i], HEX);
+  }
+  Serial.println();
+
   Serial.print("Message: ");
   Serial.println(myData.message);
+
   String msg = String(myData.message);
   if (msg == "start") {
     startMatch();
+  } else if (msg == "startdm") {
+    startDMatch(); // Starte Dath Match
   } else if (msg == "stop") {
     stopMatch();
   } else if (msg == "up") {
-      stepper.moveTo(POSITION_UP);
+    stepper.moveTo(POSITION_UP);
   } else if (msg == "poller") {
     animationToRun = POLLER_UEBERFAHRUNG_ANIMATION;
     pollerStartTime = millis();
     pollerTriggered = true;
   } else if (msg == "down") {
-      stepper.moveTo(STEPS_TO_DOWN);
+    stepper.moveTo(STEPS_TO_DOWN);
   } else if (msg == "stopM") {
-      stepper.stop();
+    stepper.stop();
   } else if (msg == "callibrate") {
-      stepper.move(5000);
-      while (digitalRead(ENDSTOP_PIN) == HIGH) {
-          stepper.run();
-      }
-      stepper.stop();
-      stepper.setCurrentPosition(0);
+    stepper.move(5000);
+    while (digitalRead(ENDSTOP_PIN) == HIGH) {
+      stepper.run();
+    }
+    stepper.stop();
+    stepper.setCurrentPosition(0);
   }
 }
+
 
 // callback when data is sent
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -381,35 +443,7 @@ void ArenaControlTask(void *pvParameters) {
           stepper.moveTo(POSITION_UP);
           stepper.run(); // Dies muss in jedem Loop aufgerufen werden, damit der Motor sich bewegt
           pollerTriggered = false; // Rücksetzen, um zukünftige Aktionen zu ermöglichen
-          Serial.println("Poller hich, da überfahren");
-      }
-
-      // Serielle Kommunikation
-      if (Serial2.available()) {
-          Serial.println("Available");
-          String receivedString = Serial2.readString();
-          Serial.println(receivedString);
-          if (receivedString == "up") {
-              stepper.moveTo(POSITION_UP);
-          } else if (receivedString == "down") {
-              stepper.moveTo(STEPS_TO_DOWN);
-          } else if (receivedString == "stopM") {
-              stepper.stop();
-          } else if (receivedString.startsWith("speed")) {
-              currentSpeed = receivedString.substring(6).toInt();
-              stepper.setSpeed(currentSpeed);
-          } else if (receivedString == "callibrate") {
-              stepper.move(5000);
-              while (digitalRead(ENDSTOP_PIN) == HIGH) {
-                  stepper.run();
-              }
-              stepper.stop();
-              stepper.setCurrentPosition(0);
-          } else if (receivedString == "start") {
-              startMatch();
-          } else if (receivedString == "stop") {
-              stopMatch();
-          }
+          Serial.println("Poller hoch, da überfahren");
       }
       delay(1);
     }
@@ -417,6 +451,7 @@ void ArenaControlTask(void *pvParameters) {
 
 void loop() {
   vTaskDelete(NULL);
+  // Periodisch Link-Qualität loggen, falls zuletzt Frames empfangen wurden
 }
 
 
@@ -431,8 +466,6 @@ void setup() {
     while (!Serial) {
       delay(10);
     }
-    
-    Serial2.begin(9600, SERIAL_8N1, RX2, TX2);
 
     // WLED starten
     FastLED.addLeds<WS2812B, WLED_PIN_RUNDUM_LEUCHTE, RGB>(leds_rundum, NUM_LEDS_RUNDUM_LEUCHTE); //,  RGB>(leds_poller, NUM_LEDS_POLLER_STATUS, NUM_LEDS_RUNDUM_LEUCHTE)
@@ -446,7 +479,14 @@ void setup() {
 
     // Set device as a Wi-Fi Station
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    esp_wifi_set_ps(WIFI_PS_NONE);
     //WiFi.disconnect();
+
+    // Eigene MAC (STA) ausgeben
+    esp_wifi_get_mac(WIFI_IF_STA, SELF_MAC);
+    Serial.printf("ESP-NOW MAC (STA): %s\n", macToString(SELF_MAC).c_str());
+
 
     // Init ESP-NOW
     if (esp_now_init() != ESP_OK) {
@@ -471,13 +511,17 @@ void setup() {
     }
 
     // WLAN starten
-    //WiFi.begin(ssid, password);
-    /*while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
-        Serial.println("Verbindung zum WLAN wird hergestellt...");
-    }*/
-    //Serial.println("Mit dem WLAN verbunden!");
-    //Serial.println(WiFi.localIP());
+    if (WIFI_ON_STARTUP) {
+      WiFi.begin(ssid, password);
+      while (WiFi.status() != WL_CONNECTED) {
+          delay(1000);
+          Serial.println("Verbindung zum WLAN wird hergestellt...");
+      }
+      Serial.println("Mit dem WLAN verbunden!");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println("WLAN deaktiviert."); 
+    }
 
     // LittleFS starten
     if (!LittleFS.begin()) {
@@ -534,7 +578,6 @@ void setup() {
 
     // Webserver starten
     server.begin();
-    Serial2.println("Verbunden");
     // Erstelle Task für LED-Animationen
     // Erstellung der Tasks
   xTaskCreatePinnedToCore(

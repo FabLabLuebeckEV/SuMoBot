@@ -5,6 +5,7 @@
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 
 /*hier ist die liste des arena-bedienpults:
 16 out Button Led
@@ -17,14 +18,8 @@
 23 Eth mosi
 05 Eth CS 
 13 Eth int (W5500)
-35 in rs232 RX
-33 out rs232 TX
 34 in Button Der Poller
 36 in Button The Count*/
-
-// Pin-Definitionen Serial
-#define RXD2 16
-#define TXD2 17
 
 // Pin-Definitionen
 //INputs
@@ -40,19 +35,27 @@ LiquidCrystal_I2C lcd(addr, 20, 4);  // set the LCD address to 0x27 for a 16 cha
 
 
 // W5500 Ethernet
+/*
 #define ETH_RST 26
 #define ETH_MISO 19
 #define ETH_SCK 18
 #define ETH_MOSI 23
 #define ETH_CS 5
 #define ETH_INT 13
+*/
 
 // Definition für Arena
 #define FIGHT_DURATION 180000    // Dauer eines Kampfes in ms
 
 // REPLACE WITH YOUR RECEIVER MAC Address
-uint8_t broadcastAddress[] = {0x34, 0x86, 0x5d, 0xfb, 0xe7, 0xe8};
+uint8_t broadcastAddress[] = {0xAC, 0x15, 0x18, 0xE9, 0xB2, 0xC0};
 uint8_t broadcastAddressObs[] = {0x08, 0x3a, 0xf2, 0x37, 0x3c, 0xfc};
+
+int8_t lastRssi = 0;          // letzte gemessene Empfangsstärke (dBm)
+char lastFromMac[18] = "";    // String der letzten Absender-MAC
+
+// MAC-Adresse des eigenen Geräts
+static uint8_t SELF_MAC[6];
 
 // Structure example to send data
 // Must match the receiver structure
@@ -83,10 +86,31 @@ long buttonCountChange = 0;
 
 bool initMatch = false;
 
+// Letzte Link-Qualität zum zuletzt gesehenen Peer
+static uint8_t lastPeer[6] = {0};
+static int8_t  lastRSSI = -127;
+static float   emaRSSI  = NAN;    // gleitender Mittelwert
+static uint32_t lastSeenMs = 0;
+
 // callback when data is sent
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   Serial.print("\r\nLast Packet Send Status:\t");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+// Hilfsfunktion: MAC hübsch ausgeben
+String macToString(const uint8_t m[6]) {
+  char buf[18];
+  snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+           m[0], m[1], m[2], m[3], m[4], m[5]);
+  return String(buf);
+}
+
+// dBm → grobe Qualitäts-% (0…100). Kein Standard, aber praxisnah.
+int rssiToQuality(int8_t rssi) {
+  if (rssi <= -100) return 0;
+  if (rssi >=  -50) return 100;
+  return 2 * (rssi + 100);
 }
 
 // Send data using ESP-NOW
@@ -122,12 +146,42 @@ void sendEspNowObs(const char* data) {
 }
 
 // Callback function that will be executed when data is received
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  memcpy(&myDataRecv, incomingData, sizeof(myData));
-  Serial.print("Bytes received: ");
-  Serial.println(len);
+// Neue Callback-Signatur für neuere ESP-NOW-Versionen
+void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
+  // eingehende Daten sichern (nur so viel kopieren wie in myDataRecv passt)
+  int toCopy = min(len, (int)sizeof(myDataRecv));
+  memcpy(&myDataRecv, incomingData, toCopy);
+
+  // Absender-MAC (optional, falls du sie brauchst)
+  const uint8_t *mac = info->src_addr;   // 6 Bytes
+
+  // RSSI in dBm aus dem RX-Control-Block
+  int8_t rssi = info->rx_ctrl->rssi;
+  lastRSSI = rssi;
+  if (isnan(emaRSSI)) emaRSSI = rssi;
+  else                emaRSSI = 0.2f * rssi + 0.8f * emaRSSI;
+  lastSeenMs = millis(); 
+
+  Serial.printf("RX %dB von %s, RSSI %d dBm\n", len, macToString(lastPeer).c_str(), rssi);
+
+  Serial.print("Byte From: ");
+  Serial.print(lastFromMac);
+  Serial.print("  RSSI: ");
+  Serial.println(lastRssi);
   Serial.print("Message: ");
   Serial.println(myDataRecv.message);
+
+  // LCD: letzte Zeile für RSSI nutzen
+  lcd.setCursor(0, 3);
+  // Zeile einmal "leeren"
+  lcd.print("                    ");
+  lcd.setCursor(0, 3);
+  lcd.print("From ");
+  lcd.print(lastFromMac);
+  lcd.print(" ");
+  lcd.print(lastRssi);
+  lcd.print(" dBm");
+
   String msg = String(myDataRecv.message);
   if (msg == "matchReady") {
     Serial.println("Match ready");
@@ -137,9 +191,9 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   } else if (msg == "matchCountdown") {
     Serial.println("Match countdown");
     sendEspNowObs("countdown");
-    // TODO implement
   }
 }
+
 
 // Init ESP-NOW
 void initESPNow() {
@@ -148,10 +202,12 @@ void initESPNow() {
     return;
   }
   esp_now_register_send_cb(OnDataSent);
-  esp_now_register_recv_cb(OnDataRecv);
+  esp_now_register_recv_cb(OnDataRecv);   // <- nutzt jetzt die neue Signatur
 }
 
+
 // init W5500
+/*
 void initW5500() {
     pinMode(ETH_RST, OUTPUT);
     digitalWrite(ETH_RST, LOW);
@@ -159,10 +215,10 @@ void initW5500() {
     digitalWrite(ETH_RST, HIGH);
     delay(100);
 }
+*/
 
 // Start Match
 void startMatch() {
-    Serial2.println("start");
     Serial.println("start");
     lcd.setCursor(0, 2);
     lcd.print("start");
@@ -173,7 +229,6 @@ void startMatch() {
 
 // Stop Match
 void stopMatch() {
-    Serial2.println("stop");
     Serial.println("stop");
     lcd.setCursor(0, 2);
     lcd.print("stop");
@@ -187,7 +242,6 @@ void stopMatch() {
 void countDown() {
     lcd.setCursor(0, 2);
     lcd.print("count");
-    Serial2.println("count");
     Serial.println("count");
     sendEspNow("count");
     sendEspNow("down");
@@ -197,7 +251,6 @@ void countDown() {
 void movePoller() {
     lcd.setCursor(0, 2);
     lcd.print("poller");
-    Serial2.println("poller");
     Serial.println("poller");
     sendEspNow("poller");
 }
@@ -231,9 +284,9 @@ void loop() {
     }
 
     // Ausgabe in Minuten und Sekunden
-    Serial.print((FIGHT_DURATION - (millis() - currentFightStartTime)) / 60000);
-    Serial.print(":");
-    Serial.println(((FIGHT_DURATION - (millis() - currentFightStartTime)) % 60000) / 1000);
+    //Serial.print((FIGHT_DURATION - (millis() - currentFightStartTime)) / 60000);
+    //Serial.print(":");
+    //Serial.println(((FIGHT_DURATION - (millis() - currentFightStartTime)) % 60000) / 1000);
     // Ausgabe auf dem display
     lcd.setCursor(0, 0);
     lcd.print("Verbleibende Zeit:");
@@ -264,9 +317,16 @@ void setup() {
     
     // Seriellen  Monitor starten
     Serial.begin(115200);
-    Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
 
+      // Set device as a Wi-Fi Station
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    //WiFi.disconnect();
+
+    // Eigene MAC (STA) ausgeben
+    esp_wifi_get_mac(WIFI_IF_STA, SELF_MAC);
+    Serial.printf("ESP-NOW MAC (STA): %s\n", macToString(SELF_MAC).c_str());
 
     // Init ESP-NOW
     initESPNow();
@@ -296,13 +356,13 @@ void setup() {
     }
 
     // WLAN starten
-    //WiFI.begin(ssid, password);
-    /*while (//WiFI.status() != WL_CONNECTED) {
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
         Serial.println("Verbindung zum WLAN wird hergestellt...");
-    }*/
+    }
     Serial.println("Mit dem WLAN verbunden!");
-    //Serial.println(//WiFI.localIP());
+    Serial.println(WiFi.localIP());
 
     // LittleFS starten
     if (!LittleFS.begin()) {
@@ -321,15 +381,14 @@ void setup() {
 
     server.on("/start", HTTP_GET, [](AsyncWebServerRequest *request) {
         startMatch();
-        request->send(200, "text/plain", "Geschwindigkeit gesetzt");
+        request->send(200, "text/plain", "Gestartet");
     });
 
     server.on("/stop", HTTP_GET, [](AsyncWebServerRequest *request) {
         stopMatch();
-        request->send(200, "text/plain", "Geschwindigkeit gesetzt");
+        request->send(200, "text/plain", "Gestoppt");
     });
 
     // Webserver starten
     server.begin();
-    Serial2.println("Verbunden");
 }
