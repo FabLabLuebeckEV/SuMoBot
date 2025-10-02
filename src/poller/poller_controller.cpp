@@ -25,7 +25,9 @@ void PollerController::begin() {
   stepper_.begin();
   leds_.begin();
 
-  status_.state = comms::PollerState::kIdle;
+  stepper_.startCalibration();
+  status_.state = comms::PollerState::kCalibrating;
+
   status_.activeAnimation = comms::AnimationId::kNone;
   status_.lastCommandId = 0;
   status_.statusFlags = 0;
@@ -134,6 +136,11 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       break;
     case comms::CommandType::kMoveAbsolute: {
       const int32_t target = command.value;
+      const int32_t current = stepper_.currentPosition();
+      if (!stepper_.isCalibrated() && target < current) {
+        handled = false;
+        break;
+      }
       const int32_t threshold = hardware::POSITION_DOWN_TARGET + hardware::POLLER_DOWN_ARM_MARGIN;
       if (target > threshold) {
         if (!canInitiateOverrun(now)) {
@@ -151,6 +158,10 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
     case comms::CommandType::kMoveRelative: {
       const int32_t current = stepper_.currentPosition();
       const int32_t target = current + command.value;
+      if (!stepper_.isCalibrated() && command.value < 0) {
+        handled = false;
+        break;
+      }
       const int32_t threshold = hardware::POSITION_DOWN_TARGET + hardware::POLLER_DOWN_ARM_MARGIN;
       if (command.value > 0 && target > threshold) {
         if (!canInitiateOverrun(now)) {
@@ -169,6 +180,10 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       if (command.limit == comms::LimitDirection::kNone) {
         handled = false;
       } else {
+        if (command.limit == comms::LimitDirection::kDown && !stepper_.isCalibrated()) {
+          handled = false;
+          break;
+        }
         if (command.limit == comms::LimitDirection::kUp) {
           if (!canInitiateOverrun(now)) {
             handled = false;
