@@ -4,15 +4,15 @@
 
 namespace poller {
 
-void StepperController::begin() {
+void StepperController::begin(const hardware::PollerParameters& config) {
+  configCache_ = hardware::sanitized(config);
   pinMode(static_cast<uint8_t>(hardware::PIN_POLLER_ENABLE), OUTPUT);
   digitalWrite(static_cast<uint8_t>(hardware::PIN_POLLER_ENABLE), HIGH);
 
   pinMode(static_cast<uint8_t>(hardware::PIN_ENDSTOP), INPUT_PULLUP);
 
-  stepper_.setMaxSpeed(hardware::STEPPER_MAX_SPEED);
-  stepper_.setAcceleration(hardware::STEPPER_ACCELERATION);
-  stepper_.setCurrentPosition(hardware::POSITION_HOME);
+  updateMotionProfile();
+  stepper_.setCurrentPosition(configCache_.positionHome);
 
   mode_ = Mode::kIdle;
   endstopLatched_ = false;
@@ -60,10 +60,10 @@ void StepperController::moveBy(int32_t delta) {
 void StepperController::moveToLimit(comms::LimitDirection direction) {
   switch (direction) {
     case comms::LimitDirection::kUp:
-      setTarget(hardware::POSITION_UP_TARGET);
+      setTarget(config().positionUpTarget);
       break;
     case comms::LimitDirection::kDown:
-      setTarget(hardware::POSITION_DOWN_TARGET);
+      setTarget(config().positionDownTarget);
       break;
     default:
       break;
@@ -85,7 +85,7 @@ void StepperController::startCalibration() {
   calibrated_ = false;
   calibrationBackoffActive_ = false;
   stepper_.stop();
-  const int32_t delta = (hardware::POSITION_UP_TARGET - stepper_.currentPosition()) + 2000;
+  const int32_t delta = (config().positionUpTarget - stepper_.currentPosition()) + 2000;
   stepper_.move(delta <= 0 ? 2000 : delta);
 }
 
@@ -111,18 +111,10 @@ bool StepperController::consumeEndstopEvent() {
   return event;
 }
 
-int32_t StepperController::currentPosition() {
-  return stepper_.currentPosition();
-}
-
-int32_t StepperController::targetPosition() {
-  return stepper_.targetPosition();
-}
-
 void StepperController::handleEndstopTriggered() {
   endstopEvent_ = true;
   stepper_.stop();
-  stepper_.setCurrentPosition(hardware::POSITION_HOME);
+  stepper_.setCurrentPosition(config().positionHome);
 
   if (mode_ == Mode::kCalibrating) {
     calibrationBackoffActive_ = true;
@@ -137,6 +129,38 @@ void StepperController::handleEndstopTriggered() {
 void StepperController::updateEnablePin() {
   const bool active = stepper_.distanceToGo() != 0;
   digitalWrite(static_cast<uint8_t>(hardware::PIN_POLLER_ENABLE), active ? LOW : HIGH);
+}
+
+void StepperController::applyConfig(const hardware::PollerParameters& config) {
+  const hardware::PollerParameters sanitised = hardware::sanitized(config);
+  const int32_t oldHome = configCache_.positionHome;
+  configCache_ = sanitised;
+  updateMotionProfile();
+
+  const int32_t offset = configCache_.positionHome - oldHome;
+  if (offset != 0) {
+    const int32_t current = stepper_.currentPosition() + offset;
+    const int32_t target = stepper_.targetPosition() + offset;
+    stepper_.setCurrentPosition(current);
+    stepper_.moveTo(target);
+  }
+}
+
+int32_t StepperController::currentPosition() {
+  return stepper_.currentPosition();
+}
+
+int32_t StepperController::targetPosition() {
+  return stepper_.targetPosition();
+}
+
+void StepperController::updateMotionProfile() {
+  stepper_.setMaxSpeed(configCache_.stepperMaxSpeed);
+  stepper_.setAcceleration(configCache_.stepperAcceleration);
+}
+
+const hardware::PollerParameters& StepperController::config() const {
+  return configCache_;
 }
 
 }  // namespace poller

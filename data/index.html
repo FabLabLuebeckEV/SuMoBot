@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Arena Pult Steuerung</title>
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+    <header>
+        <h1>Arena Pult Steuerung</h1>
+        <p class="subtitle">Poller, LED-Animationen und Match-Ablauf zentral vom Pult steuern.</p>
+    </header>
+
+    <main>
+        <section class="card">
+            <h2>Match Ablauf</h2>
+            <div class="quick-actions">
+                <button data-action="startMatch">Match starten</button>
+                <button data-action="stopMatch">Match stoppen</button>
+                <button data-action="triggerCountdown">Countdown</button>
+                <button data-action="raisePoller">Poller hoch</button>
+                <button data-action="lowerPoller">Poller runter</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Poller Überfahrt</h2>
+            <div class="quick-actions">
+                <button data-action="armOverrun">Überfahrt aktivieren</button>
+                <button data-action="disarmOverrun">Cooldown starten</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Schrittmotor</h2>
+            <div class="controls">
+                <div class="control-group">
+                    <label for="absoluteSteps">Position (Schritte)</label>
+                    <div class="inline">
+                        <input id="absoluteSteps" type="number" value="0" />
+                        <button data-action="moveAbsolute">Fahre auf Position</button>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="relativeSteps">Relativ bewegen</label>
+                    <div class="inline">
+                        <input id="relativeSteps" type="number" value="-500" />
+                        <button data-action="moveRelative">Bewegen</button>
+                    </div>
+                </div>
+                <div class="quick-actions">
+                    <button data-action="moveLimit" data-direction="up">Bis Endanschlag oben</button>
+                    <button data-action="moveLimit" data-direction="down">Bis Endanschlag unten</button>
+                    <button data-action="stopStepper">Motor stoppen</button>
+                    <button data-action="calibrate">Kalibrieren</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Poller Parameter</h2>
+            <div class="config-grid">
+                <div class="control-group">
+                    <label for="configPositionHome">Home (Schritte)</label>
+                    <input id="configPositionHome" type="number" step="1" />
+                </div>
+                <div class="control-group">
+                    <label for="configPositionUpTarget">Oben-Ziel (Schritte)</label>
+                    <input id="configPositionUpTarget" type="number" step="1" />
+                </div>
+                <div class="control-group">
+                    <label for="configPositionDownTarget">Unten-Ziel (Schritte)</label>
+                    <input id="configPositionDownTarget" type="number" step="1" />
+                </div>
+                <div class="control-group">
+                    <label for="configDownArmMargin">Überfahr-Marge (Schritte)</label>
+                    <input id="configDownArmMargin" type="number" step="1" />
+                </div>
+                <div class="control-group">
+                    <label for="configStepperMaxSpeed">Max. Speed (Steps/s)</label>
+                    <input id="configStepperMaxSpeed" type="number" step="100" />
+                </div>
+                <div class="control-group">
+                    <label for="configStepperAcceleration">Acceleration (Steps/s²)</label>
+                    <input id="configStepperAcceleration" type="number" step="100" />
+                </div>
+                <div class="control-group">
+                    <label for="configStatusInterval">Statusintervall (ms)</label>
+                    <input id="configStatusInterval" type="number" step="10" />
+                </div>
+                <div class="control-group">
+                    <label for="configOverrunCooldown">Cooldown (ms)</label>
+                    <input id="configOverrunCooldown" type="number" step="100" />
+                </div>
+            </div>
+            <div class="quick-actions config-actions">
+                <button data-action="saveConfig">Parameter speichern</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>LED Animationen</h2>
+            <div class="quick-actions">
+                <button data-action="startAnimation" data-animation="countdown">Countdown</button>
+                <button data-action="startAnimation" data-animation="poller_overrun">Poller Überfahrung</button>
+                <button data-action="startAnimation" data-animation="arena_stop">Arena Stop</button>
+                <button data-action="startAnimation" data-animation="arena_control">Arena Control</button>
+                <button data-action="stopAnimation">Animation stoppen</button>
+            </div>
+        </section>
+
+        <section class="card status-card">
+            <h2>Status</h2>
+            <div id="status" class="status">
+                <div class="status-row"><span>Phase:</span><strong id="phase">–</strong></div>
+                <div class="status-row"><span>Poller Zustand:</span><strong id="state">–</strong></div>
+                <div class="status-row"><span>Animation:</span><strong id="animation">–</strong></div>
+                <div class="status-row"><span>Position / Ziel:</span><strong id="position">–</strong></div>
+                <div class="status-row"><span>Flags:</span><strong id="flags">–</strong></div>
+                <div class="status-row"><span>RSSI:</span><strong id="rssi">–</strong></div>
+                <div class="status-row"><span>Status-Intervall:</span><strong id="statusInterval">–</strong></div>
+                <div class="status-row"><span>Cooldown (ms):</span><strong id="statusCooldown">–</strong></div>
+                <div class="status-row"><span>Match Restzeit:</span><strong id="remaining">–</strong></div>
+                <div class="status-row"><span>Letzte Aktion:</span><strong id="lastAction">–</strong></div>
+                <div class="status-row"><span>Überfahrt bereit:</span><strong id="overrunArmed">–</strong></div>
+                <div class="status-row"><span>Überfahrt erkannt:</span><strong id="overrunDetected">–</strong></div>
+                <div class="status-row"><span>Cooldown aktiv:</span><strong id="cooldown">–</strong></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Meldungen</h2>
+            <ul id="log" class="log"></ul>
+        </section>
+    </main>
+
+    <template id="log-entry-template">
+        <li class="log-entry"></li>
+    </template>
+
+    <script>
+        const statusLabels = {
+            phase: document.getElementById('phase'),
+            state: document.getElementById('state'),
+            animation: document.getElementById('animation'),
+            position: document.getElementById('position'),
+            flags: document.getElementById('flags'),
+            rssi: document.getElementById('rssi'),
+            statusInterval: document.getElementById('statusInterval'),
+            statusCooldown: document.getElementById('statusCooldown'),
+            remaining: document.getElementById('remaining'),
+            lastAction: document.getElementById('lastAction'),
+            overrunArmed: document.getElementById('overrunArmed'),
+            overrunDetected: document.getElementById('overrunDetected'),
+            cooldown: document.getElementById('cooldown')
+        };
+
+        const configInputs = {
+            positionHome: document.getElementById('configPositionHome'),
+            positionUpTarget: document.getElementById('configPositionUpTarget'),
+            positionDownTarget: document.getElementById('configPositionDownTarget'),
+            downArmMargin: document.getElementById('configDownArmMargin'),
+            stepperMaxSpeed: document.getElementById('configStepperMaxSpeed'),
+            stepperAcceleration: document.getElementById('configStepperAcceleration'),
+            statusIntervalMs: document.getElementById('configStatusInterval'),
+            overrunCooldownMs: document.getElementById('configOverrunCooldown')
+        };
+
+        const logList = document.getElementById('log');
+        const logTemplate = document.getElementById('log-entry-template');
+
+        function log(message, type = 'info') {
+            const entry = logTemplate.content.firstElementChild.cloneNode(true);
+            entry.textContent = `${new Date().toLocaleTimeString()} – ${message}`;
+            entry.dataset.type = type;
+            logList.prepend(entry);
+            while (logList.children.length > 12) {
+                logList.removeChild(logList.lastChild);
+            }
+        }
+
+        async function sendCommand(type, extra = {}) {
+            const payload = new URLSearchParams({ type, ...extra });
+
+            try {
+                const response = await fetch('/api/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: payload
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Unbekannter Fehler');
+                }
+                log(`Kommando '${type}' gesendet`, 'success');
+            } catch (error) {
+                log(`Fehler bei '${type}': ${error.message}`, 'error');
+            }
+        }
+
+        function formatRemaining(ms) {
+            if (typeof ms !== 'number') {
+                return '–';
+            }
+            const seconds = Math.max(0, Math.floor(ms / 1000));
+            const minutes = Math.floor(seconds / 60);
+            const rest = seconds % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+        }
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                statusLabels.phase.textContent = data.phase || '–';
+                statusLabels.remaining.textContent = formatRemaining(data.remainingMs);
+                statusLabels.lastAction.textContent = data.lastAction || '–';
+
+                if (!data.ready) {
+                    statusLabels.state.textContent = 'keine Daten';
+                    statusLabels.animation.textContent = '–';
+                statusLabels.position.textContent = '–';
+                statusLabels.flags.textContent = '–';
+                statusLabels.rssi.textContent = '–';
+                statusLabels.statusInterval.textContent = '–';
+                statusLabels.statusCooldown.textContent = '–';
+                statusLabels.overrunArmed.textContent = '–';
+                statusLabels.overrunDetected.textContent = '–';
+                statusLabels.cooldown.textContent = '–';
+                Object.values(configInputs).forEach((input) => {
+                    if (input && document.activeElement !== input) {
+                        input.value = '';
+                    }
+                });
+                return;
+            }
+
+                statusLabels.state.textContent = data.state;
+                statusLabels.animation.textContent = data.animation;
+                statusLabels.position.textContent = `${data.position} / ${data.target}`;
+                statusLabels.flags.textContent = `0x${Number(data.flags).toString(16)}`;
+                statusLabels.rssi.textContent = `${data.rssi} dBm / ${data.emaRssi} dBm`;
+                if (data.config) {
+                    statusLabels.statusInterval.textContent = data.config.statusIntervalMs ?? '–';
+                    statusLabels.statusCooldown.textContent = data.config.overrunCooldownMs ?? '–';
+                    Object.entries(configInputs).forEach(([key, input]) => {
+                        if (!input || (document.activeElement === input && input.type === 'number')) {
+                            return;
+                        }
+                        if (data.config[key] !== undefined) {
+                            input.value = data.config[key];
+                        }
+                    });
+                } else {
+                    statusLabels.statusInterval.textContent = '–';
+                    statusLabels.statusCooldown.textContent = '–';
+                }
+                statusLabels.overrunArmed.textContent = data.overrunArmed ? 'ja' : 'nein';
+                statusLabels.overrunDetected.textContent = data.overrunDetected ? 'ja' : 'nein';
+                statusLabels.cooldown.textContent = data.cooldown ? 'aktiv' : 'aus';
+            } catch (error) {
+                statusLabels.state.textContent = 'Fehler';
+                statusLabels.overrunArmed.textContent = '–';
+                statusLabels.overrunDetected.textContent = '–';
+                statusLabels.cooldown.textContent = '–';
+                statusLabels.statusInterval.textContent = '–';
+                statusLabels.statusCooldown.textContent = '–';
+            }
+        }
+
+        document.body.addEventListener('click', (event) => {
+            const button = event.target.closest('button[data-action]');
+            if (!button) {
+                return;
+            }
+
+            const action = button.dataset.action;
+            if (action === 'moveAbsolute') {
+                const value = document.getElementById('absoluteSteps').value;
+                sendCommand('moveAbsolute', { value });
+            } else if (action === 'moveRelative') {
+                const value = document.getElementById('relativeSteps').value;
+                sendCommand('moveRelative', { value });
+            } else if (action === 'moveLimit') {
+                const direction = button.dataset.direction;
+                sendCommand('moveLimit', { direction });
+            } else if (action === 'startAnimation') {
+                const animation = button.dataset.animation;
+                sendCommand('startAnimation', { animation });
+            } else if (action === 'stopAnimation') {
+                sendCommand('stopAnimation');
+            } else if (action === 'armOverrun') {
+                sendCommand('armOverrun');
+            } else if (action === 'disarmOverrun') {
+                sendCommand('disarmOverrun');
+            } else if (action === 'saveConfig') {
+                const payload = {};
+                Object.entries(configInputs).forEach(([key, input]) => {
+                    if (input && input.value !== '') {
+                        payload[key] = input.value;
+                    }
+                });
+                sendCommand('updateConfig', payload);
+            } else {
+                sendCommand(action);
+            }
+        });
+
+        updateStatus();
+        setInterval(updateStatus, 1000);
+    </script>
+</body>
+</html>

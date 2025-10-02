@@ -7,6 +7,7 @@
 #include "comms/peer_config.h"
 #include "common/espnow_link.h"
 #include "hardware_config.h"
+#include "poller_settings.h"
 
 namespace poller {
 
@@ -22,7 +23,15 @@ void PollerController::begin() {
   lastOverrunMs_ = 0;
   cooldownWasActive_ = false;
 
-  stepper_.begin();
+  hardware::PollerParameters stored = hardware::DEFAULT_POLLER_PARAMETERS;
+  if (settings::loadParameters(&stored)) {
+    config_ = hardware::sanitized(stored);
+  } else {
+    config_ = hardware::DEFAULT_POLLER_PARAMETERS;
+    settings::saveParameters(config_);
+  }
+
+  stepper_.begin(config_);
   leds_.begin();
 
   stepper_.startCalibration();
@@ -33,6 +42,7 @@ void PollerController::begin() {
   status_.statusFlags = 0;
   status_.lastRssi = -127;
   status_.emaRssi = -127;
+  status_.config = config_;
 
   if (!comms::beginEspNow()) {
     Serial.println("ESP-NOW initialisation failed");
@@ -141,7 +151,7 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
         handled = false;
         break;
       }
-      const int32_t threshold = hardware::POSITION_DOWN_TARGET + hardware::POLLER_DOWN_ARM_MARGIN;
+      const int32_t threshold = config_.positionDownTarget + config_.downArmMargin;
       if (target > threshold) {
         if (!canInitiateOverrun(now)) {
           handled = false;
@@ -162,7 +172,7 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
         handled = false;
         break;
       }
-      const int32_t threshold = hardware::POSITION_DOWN_TARGET + hardware::POLLER_DOWN_ARM_MARGIN;
+      const int32_t threshold = config_.positionDownTarget + config_.downArmMargin;
       if (command.value > 0 && target > threshold) {
         if (!canInitiateOverrun(now)) {
           handled = false;
@@ -214,6 +224,11 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
     case comms::CommandType::kSetOverrunArmed:
       handled = setOverrunArmed(command.value != 0, now);
       break;
+    case comms::CommandType::kSetParameter: {
+      const auto parameter = static_cast<comms::PollerParameterId>(command.reserved);
+      handled = handleParameterUpdate(parameter, command.value);
+      break;
+    }
     default:
       handled = false;
       break;
@@ -228,7 +243,7 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
 
 void PollerController::publishStatus(bool force) {
   const uint32_t now = millis();
-  if (!force && (now - lastStatusSentMs_) < hardware::STATUS_INTERVAL_MS) {
+  if (!force && (now - lastStatusSentMs_) < config_.statusIntervalMs) {
     return;
   }
 
@@ -237,6 +252,7 @@ void PollerController::publishStatus(bool force) {
   status_.currentPosition = stepper_.currentPosition();
   status_.targetPosition = stepper_.targetPosition();
   refreshStatusFlags(now);
+  status_.config = config_;
 
   status_.lastRssi = lastRssi_;
   status_.emaRssi = isnan(emaRssi_) ? lastRssi_ : static_cast<int8_t>(roundf(emaRssi_));
@@ -282,7 +298,7 @@ void PollerController::refreshStatusFlags(uint32_t now) {
 
 bool PollerController::isPollerLowered() {
   const int32_t current = stepper_.currentPosition();
-  const int32_t threshold = hardware::POSITION_DOWN_TARGET + hardware::POLLER_DOWN_ARM_MARGIN;
+  const int32_t threshold = config_.positionDownTarget + config_.downArmMargin;
   return current <= threshold;
 }
 
@@ -290,7 +306,7 @@ bool PollerController::cooldownActive(uint32_t now) const {
   if (lastOverrunMs_ == 0) {
     return false;
   }
-  return static_cast<uint32_t>(now - lastOverrunMs_) < hardware::POLLER_COOLDOWN_MS;
+  return static_cast<uint32_t>(now - lastOverrunMs_) < config_.overrunCooldownMs;
 }
 
 bool PollerController::canInitiateOverrun(uint32_t now) {
@@ -330,6 +346,82 @@ bool PollerController::setOverrunArmed(bool armed, uint32_t now) {
 
   overrunArmed_ = false;
   return true;
+}
+
+bool PollerController::handleParameterUpdate(comms::PollerParameterId id, int32_t rawValue) {
+  hardware::PollerParameters updated = config_;
+  bool recognised = true;
+  switch (id) {
+    case comms::PollerParameterId::kPositionHome:
+      updated.positionHome = rawValue;
+      break;
+    case comms::PollerParameterId::kPositionUpTarget:
+      updated.positionUpTarget = rawValue;
+      break;
+    case comms::PollerParameterId::kPositionDownTarget:
+      updated.positionDownTarget = rawValue;
+      break;
+    case comms::PollerParameterId::kDownArmMargin:
+      updated.downArmMargin = rawValue;
+      break;
+    case comms::PollerParameterId::kStepperMaxSpeed: {
+      float value = 0.0f;
+      static_assert(sizeof(value) == sizeof(rawValue), "float and int32_t size mismatch");
+      memcpy(&value, &rawValue, sizeof(value));
+      if (!isfinite(value)) {
+        return false;
+      }
+      updated.stepperMaxSpeed = value;
+      break;
+    }
+    case comms::PollerParameterId::kStepperAcceleration: {
+      float value = 0.0f;
+      static_assert(sizeof(value) == sizeof(rawValue), "float and int32_t size mismatch");
+      memcpy(&value, &rawValue, sizeof(value));
+      if (!isfinite(value)) {
+        return false;
+      }
+      updated.stepperAcceleration = value;
+      break;
+    }
+    case comms::PollerParameterId::kStatusIntervalMs:
+      if (rawValue <= 0) {
+        return false;
+      }
+      updated.statusIntervalMs = static_cast<uint32_t>(rawValue);
+      break;
+    case comms::PollerParameterId::kOverrunCooldownMs:
+      if (rawValue <= 0) {
+        return false;
+      }
+      updated.overrunCooldownMs = static_cast<uint32_t>(rawValue);
+      break;
+    default:
+      recognised = false;
+      break;
+  }
+
+  if (!recognised) {
+    return false;
+  }
+
+  updated = hardware::sanitized(updated);
+  config_ = updated;
+  stepper_.applyConfig(config_);
+  onConfigChanged();
+
+  if (!settings::saveParameters(config_)) {
+    Serial.println("Parameter save failed");
+    return false;
+  }
+  return true;
+}
+
+void PollerController::onConfigChanged() {
+  status_.config = config_;
+  overrunArmed_ = isPollerLowered();
+  const uint32_t now = millis();
+  cooldownWasActive_ = cooldownActive(now);
 }
 
 }  // namespace poller

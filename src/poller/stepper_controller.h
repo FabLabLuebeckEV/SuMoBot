@@ -9,7 +9,7 @@ namespace poller {
 
 class StepperController {
  public:
-  void begin();
+  void begin(const hardware::PollerParameters& config);
   void update();
 
   void setTarget(int32_t position);
@@ -17,6 +17,7 @@ class StepperController {
   void moveToLimit(comms::LimitDirection direction);
   void stop();
   void startCalibration();
+  void applyConfig(const hardware::PollerParameters& config);
 
   bool isBusy();
   bool isCalibrating() const;
@@ -36,6 +37,8 @@ class StepperController {
 
   void handleEndstopTriggered();
   void updateEnablePin();
+  void updateMotionProfile();
+  const hardware::PollerParameters& config() const;
 
   AccelStepper stepper_{AccelStepper::DRIVER, hardware::PIN_STEPPER_STEP, hardware::PIN_STEPPER_DIR};
   Mode mode_ = Mode::kIdle;
@@ -43,6 +46,7 @@ class StepperController {
   bool endstopEvent_ = false;
   bool calibrated_ = false;
   bool calibrationBackoffActive_ = false;
+  hardware::PollerParameters configCache_ = hardware::DEFAULT_POLLER_PARAMETERS;
 };
 
 }  // namespace poller

@@ -23,6 +23,8 @@ class PollerController {
   bool cooldownActive(uint32_t now) const;
   bool canInitiateOverrun(uint32_t now);
   bool setOverrunArmed(bool armed, uint32_t now);
+  bool handleParameterUpdate(comms::PollerParameterId id, int32_t rawValue);
+  void onConfigChanged();
 
   StepperController stepper_;
   LedController leds_;
@@ -39,6 +41,7 @@ class PollerController {
   uint8_t pultAddress_[6] = {0};
   int8_t lastRssi_ = -127;
   float emaRssi_ = NAN;
+  hardware::PollerParameters config_ = hardware::DEFAULT_POLLER_PARAMETERS;
 
   static PollerController* instance_;
 };

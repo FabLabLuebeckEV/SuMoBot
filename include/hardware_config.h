@@ -21,18 +21,39 @@ constexpr uint16_t   LEDS_POLLER    = 60;
 constexpr gpio_num_t PIN_LED_ARENA  = GPIO_NUM_26;
 constexpr uint16_t   LEDS_ARENA     = 300;
 
-// Stepper motion limits
-constexpr int32_t POSITION_HOME          = 0;
-constexpr int32_t POSITION_UP_TARGET     = 7500;
-constexpr int32_t POSITION_DOWN_TARGET   = -7350;
-constexpr int32_t POLLER_DOWN_ARM_MARGIN = 400;
-constexpr float   STEPPER_MAX_SPEED      = 45000.0f;
-constexpr float   STEPPER_ACCELERATION   = 2000.0f;
+struct PollerParameters {
+  int32_t positionHome = 0;
+  int32_t positionUpTarget = 7500;
+  int32_t positionDownTarget = -7350;
+  int32_t downArmMargin = 400;
+  float   stepperMaxSpeed = 45000.0f;
+  float   stepperAcceleration = 2000.0f;
+  uint32_t statusIntervalMs = 250;
+  uint32_t overrunCooldownMs = 3000;
+};
 
-// Status publish interval
-constexpr uint32_t STATUS_INTERVAL_MS = 250;
+constexpr PollerParameters DEFAULT_POLLER_PARAMETERS{};
 
-// Poller overrun handling
-constexpr uint32_t POLLER_COOLDOWN_MS = 3000;  // cooldown after an overrun event (ms)
+inline bool isValid(const PollerParameters& params) {
+  return params.stepperMaxSpeed > 0.0f && params.stepperAcceleration > 0.0f &&
+         params.statusIntervalMs > 0 && params.overrunCooldownMs > 0;
+}
+
+inline PollerParameters sanitized(const PollerParameters& params) {
+  PollerParameters result = params;
+  if (result.stepperMaxSpeed <= 0.0f) {
+    result.stepperMaxSpeed = DEFAULT_POLLER_PARAMETERS.stepperMaxSpeed;
+  }
+  if (result.stepperAcceleration <= 0.0f) {
+    result.stepperAcceleration = DEFAULT_POLLER_PARAMETERS.stepperAcceleration;
+  }
+  if (result.statusIntervalMs == 0) {
+    result.statusIntervalMs = DEFAULT_POLLER_PARAMETERS.statusIntervalMs;
+  }
+  if (result.overrunCooldownMs == 0) {
+    result.overrunCooldownMs = DEFAULT_POLLER_PARAMETERS.overrunCooldownMs;
+  }
+  return result;
+}
 
 }  // namespace hardware
