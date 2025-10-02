@@ -16,7 +16,8 @@ enum class CommandType : uint8_t {
   kStopAnimation    = 6,
   kCalibrate        = 7,
   kSetOverrunArmed  = 8,
-  kSetParameter     = 9
+  kSetParameter     = 9,
+  kPing             = 10
 };
 
 enum class LimitDirection : int8_t {

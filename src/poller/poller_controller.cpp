@@ -60,7 +60,6 @@ void PollerController::begin() {
 
 void PollerController::loop() {
   stepper_.update();
-  leds_.update();
 
   const bool endstopEvent = stepper_.consumeEndstopEvent();
   const uint32_t now = millis();
@@ -102,6 +101,23 @@ void PollerController::loop() {
   if (endstopEvent) {
     forcePublish = true;
   }
+
+  if (manualControlActive_) {
+    if (!stepper_.isBusy() && (now - manualControlLastMs_) > 250U) {
+      manualControlActive_ = false;
+    }
+  }
+
+  LedController::Inputs ledInputs{};
+  ledInputs.pollerIsLowered = isPollerLowered();
+  ledInputs.pollerIsUp = isPollerRaised();
+  ledInputs.pollerMoving = stepper_.isBusy();
+  ledInputs.manualControl = manualControlActive_;
+  ledInputs.overrunArmed = overrunArmed_;
+  ledInputs.cooldownActive = cooldownActive(now);
+  ledInputs.sensorActive = pollerSensorLatched_;
+  leds_.applyInputs(ledInputs);
+  leds_.update();
 
   publishStatus(forcePublish);
 }
@@ -163,6 +179,8 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       }
       stepper_.setTarget(target);
       status_.state = comms::PollerState::kMoving;
+      manualControlActive_ = true;
+      manualControlLastMs_ = now;
       break;
     }
     case comms::CommandType::kMoveRelative: {
@@ -184,6 +202,8 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       }
       stepper_.moveBy(command.value);
       status_.state = comms::PollerState::kMoving;
+      manualControlActive_ = true;
+      manualControlLastMs_ = now;
       break;
     }
     case comms::CommandType::kMoveToLimit:
@@ -205,6 +225,11 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
         }
         stepper_.moveToLimit(command.limit);
         status_.state = comms::PollerState::kMoving;
+        const bool autoRaise = (command.limit == comms::LimitDirection::kUp) && pollerSensorLatched_;
+        if (!autoRaise) {
+          manualControlActive_ = true;
+          manualControlLastMs_ = now;
+        }
       }
       break;
     case comms::CommandType::kStopStepper:
@@ -223,6 +248,9 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       break;
     case comms::CommandType::kSetOverrunArmed:
       handled = setOverrunArmed(command.value != 0, now);
+      break;
+    case comms::CommandType::kPing:
+      handled = true;
       break;
     case comms::CommandType::kSetParameter: {
       const auto parameter = static_cast<comms::PollerParameterId>(command.reserved);
@@ -300,6 +328,12 @@ bool PollerController::isPollerLowered() {
   const int32_t current = stepper_.currentPosition();
   const int32_t threshold = config_.positionDownTarget + config_.downArmMargin;
   return current <= threshold;
+}
+
+bool PollerController::isPollerRaised() {
+  const int32_t current = stepper_.currentPosition();
+  const int32_t threshold = config_.positionUpTarget - 200;
+  return current >= threshold;
 }
 
 bool PollerController::cooldownActive(uint32_t now) const {

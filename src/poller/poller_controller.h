@@ -20,6 +20,7 @@ class PollerController {
   void publishStatus(bool force = false);
   void refreshStatusFlags(uint32_t now);
   bool isPollerLowered();
+  bool isPollerRaised();
   bool cooldownActive(uint32_t now) const;
   bool canInitiateOverrun(uint32_t now);
   bool setOverrunArmed(bool armed, uint32_t now);
@@ -42,6 +43,8 @@ class PollerController {
   int8_t lastRssi_ = -127;
   float emaRssi_ = NAN;
   hardware::PollerParameters config_ = hardware::DEFAULT_POLLER_PARAMETERS;
+  bool manualControlActive_ = false;
+  uint32_t manualControlLastMs_ = 0;
 
   static PollerController* instance_;
 };

@@ -119,6 +119,7 @@
                 <div class="status-row"><span>Position / Ziel:</span><strong id="position">–</strong></div>
                 <div class="status-row"><span>Flags:</span><strong id="flags">–</strong></div>
                 <div class="status-row"><span>RSSI:</span><strong id="rssi">–</strong></div>
+                <div class="status-row"><span>Ping:</span><strong id="pingInfo">–</strong></div>
                 <div class="status-row"><span>Status-Intervall:</span><strong id="statusInterval">–</strong></div>
                 <div class="status-row"><span>Cooldown (ms):</span><strong id="statusCooldown">–</strong></div>
                 <div class="status-row"><span>Match Restzeit:</span><strong id="remaining">–</strong></div>
@@ -147,6 +148,7 @@
             position: document.getElementById('position'),
             flags: document.getElementById('flags'),
             rssi: document.getElementById('rssi'),
+            ping: document.getElementById('pingInfo'),
             statusInterval: document.getElementById('statusInterval'),
             statusCooldown: document.getElementById('statusCooldown'),
             remaining: document.getElementById('remaining'),
@@ -226,6 +228,7 @@
                 statusLabels.rssi.textContent = '–';
                 statusLabels.statusInterval.textContent = '–';
                 statusLabels.statusCooldown.textContent = '–';
+                statusLabels.ping.textContent = '–';
                 statusLabels.overrunArmed.textContent = '–';
                 statusLabels.overrunDetected.textContent = '–';
                 statusLabels.cooldown.textContent = '–';
@@ -257,6 +260,16 @@
                     statusLabels.statusInterval.textContent = '–';
                     statusLabels.statusCooldown.textContent = '–';
                 }
+                if (data.ping) {
+                    if (data.ping.ageMs === null || data.ping.ageMs === undefined) {
+                        statusLabels.ping.textContent = 'wartet...';
+                    } else {
+                        const age = Number(data.ping.ageMs);
+                        statusLabels.ping.textContent = data.ping.healthy ? `ok (${age} ms)` : `timeout (${age} ms)`;
+                    }
+                } else {
+                    statusLabels.ping.textContent = '–';
+                }
                 statusLabels.overrunArmed.textContent = data.overrunArmed ? 'ja' : 'nein';
                 statusLabels.overrunDetected.textContent = data.overrunDetected ? 'ja' : 'nein';
                 statusLabels.cooldown.textContent = data.cooldown ? 'aktiv' : 'aus';
@@ -267,6 +280,7 @@
                 statusLabels.cooldown.textContent = '–';
                 statusLabels.statusInterval.textContent = '–';
                 statusLabels.statusCooldown.textContent = '–';
+                statusLabels.ping.textContent = '–';
             }
         }
 

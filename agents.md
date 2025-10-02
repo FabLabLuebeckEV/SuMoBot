@@ -13,3 +13,5 @@
 - Poller fährt beim Start automatisch zur oberen Endlage (Kalibrierung) und ignoriert Abwärtsbefehle, solange keine gültige Referenz vorliegt.
 - Bewegungs-/Timing-Parameter (`PollerParameters`) werden im EEPROM persistiert; sie lassen sich per Pult-Weboberfläche (Sektion „Poller Parameter“) ändern und werden via ESP-NOW (`kSetParameter`) an den Poller übertragen.
 - `/api/status` liefert die aktuell verwendeten Parameter zurück, damit das UI die Felder befüllen kann.
+- Pult sendet alle 5 s ein ESP-NOW `kPing`; der Poller antwortet sofort über den Status-Stream. Das Web-UI zeigt Alter und Zustand des letzten Ping-Pong an.
+- Poller-LEDs: Init blau, Idle mit Arena-Regenbogen; Matchphase grün, Stopp rot. Überfahrt animiert den Poller-Ring (außen→innen) und hält Sensor-Events, Rundum-Licht folgt Poller-Position.

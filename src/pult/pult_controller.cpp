@@ -45,7 +45,8 @@ void PultController::begin() {
 }
 
 void PultController::loop() {
-  // Reserved for future background tasks (e.g., heartbeat commands).
+  const uint32_t now = millis();
+  tickPing(now);
 }
 
 void PultController::onEspNowReceive(const uint8_t* mac, const uint8_t* data, int len, int8_t rssi) {
@@ -120,6 +121,24 @@ bool PultController::sendSetParameter(comms::PollerParameterId id, int32_t rawVa
   return sendCommand(command);
 }
 
+uint32_t PultController::timeSinceLastPong(uint32_t now) const {
+  if (lastPongMs_ == 0) {
+    return UINT32_MAX;
+  }
+  return now - lastPongMs_;
+}
+
+bool PultController::hasPong() const {
+  return lastPongMs_ != 0;
+}
+
+bool PultController::pingHealthy(uint32_t now, uint32_t timeoutMs) const {
+  if (!hasPong()) {
+    return false;
+  }
+  return timeSinceLastPong(now) <= timeoutMs;
+}
+
 bool PultController::sendObserverMessage(const char* text) {
   if (!text) {
     return false;
@@ -155,7 +174,7 @@ uint32_t PultController::lastStatusTimestamp() const {
   return lastStatusMs_;
 }
 
-bool PultController::sendCommand(const comms::PollerCommand& commandTemplate) {
+bool PultController::sendCommand(const comms::PollerCommand& commandTemplate, uint8_t* outCommandId) {
   if (!pollerKnown_) {
     Serial.println("Poller MAC unknown. Cannot send command.");
     return false;
@@ -166,6 +185,9 @@ bool PultController::sendCommand(const comms::PollerCommand& commandTemplate) {
     commandCounter_ = 1;
   }
   command.commandId = commandCounter_;
+  if (outCommandId) {
+    *outCommandId = command.commandId;
+  }
 
   bool sent = comms::sendTo(pollerAddress_, reinterpret_cast<const uint8_t*>(&command), sizeof(command));
   if (!sent) {
@@ -179,6 +201,10 @@ void PultController::handleStatus(const comms::PollerStatus& status, const uint8
   lastStatusMs_ = millis();
   statusReceived_ = true;
 
+  if (lastPingId_ != 0 && status.lastCommandId == lastPingId_) {
+    lastPongMs_ = lastStatusMs_;
+  }
+
   if (!pollerKnown_ || memcmp(pollerAddress_, mac, 6) != 0) {
     memcpy(pollerAddress_, mac, 6);
     comms::addPeer(pollerAddress_);
@@ -190,6 +216,27 @@ void PultController::handleStatus(const comms::PollerStatus& status, const uint8
     comms::addPeer(observerAddress_);
     observerKnown_ = true;
   }
+}
+
+void PultController::tickPing(uint32_t now) {
+  if (!pollerKnown_) {
+    return;
+  }
+  if ((now - lastPingMs_) >= 5000) {
+    sendPing(now);
+  }
+}
+
+bool PultController::sendPing(uint32_t now) {
+  comms::PollerCommand command{};
+  command.type = comms::CommandType::kPing;
+  uint8_t assignedId = 0;
+  if (sendCommand(command, &assignedId)) {
+    lastPingMs_ = now;
+    lastPingId_ = assignedId;
+    return true;
+  }
+  return false;
 }
 
 }  // namespace pult

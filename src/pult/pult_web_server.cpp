@@ -254,6 +254,7 @@ void PultWebServer::handleCommandRequest(AsyncWebServerRequest* request) {
 void PultWebServer::handleStatusRequest(AsyncWebServerRequest* request) {
   String json;
   json.reserve(320);
+  const uint32_t now = millis();
   json += "{\"phase\":\"";
   json += phaseToString(orchestrator_.phase());
   json += "\"";
@@ -292,7 +293,7 @@ void PultWebServer::handleStatusRequest(AsyncWebServerRequest* request) {
     json += ",\"emaRssi\":";
     json += status.emaRssi;
     json += ",\"ageMs\":";
-    json += millis() - controller_.lastStatusTimestamp();
+    json += now - controller_.lastStatusTimestamp();
     json += ",\"overrunArmed\":";
     json += orchestrator_.pollerOverrunArmed() ? "true" : "false";
     json += ",\"overrunDetected\":";
@@ -317,6 +318,18 @@ void PultWebServer::handleStatusRequest(AsyncWebServerRequest* request) {
     json += status.config.overrunCooldownMs;
     json += "}";
   }
+
+  json += ",\"ping\":{";
+  if (controller_.hasPong()) {
+    const bool healthy = controller_.pingHealthy(now);
+    json += "\"ageMs\":";
+    json += controller_.timeSinceLastPong(now);
+    json += ",\"healthy\":";
+    json += healthy ? "true" : "false";
+  } else {
+    json += "\"ageMs\":null,\"healthy\":false";
+  }
+  json += "}";
 
   json += "}";
 
