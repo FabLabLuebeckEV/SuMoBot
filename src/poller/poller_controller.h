@@ -17,7 +17,7 @@ class PollerController {
 
  private:
   void handleCommand(const comms::PollerCommand& command, int8_t rssi, const uint8_t mac[6]);
-  void publishStatus(bool force = false);
+  void publishStatus(bool force = false, uint32_t reasonMask = 0);
   void refreshStatusFlags(uint32_t now);
   bool isPollerLowered();
   bool isPollerRaised();
@@ -45,6 +45,8 @@ class PollerController {
   hardware::PollerParameters config_ = hardware::DEFAULT_POLLER_PARAMETERS;
   bool manualControlActive_ = false;
   uint32_t manualControlLastMs_ = 0;
+  bool wasLowered_ = false;
+  bool wasRaised_ = false;
 
   static PollerController* instance_;
 };

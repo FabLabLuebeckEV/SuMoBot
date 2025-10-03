@@ -25,6 +25,15 @@
         </section>
 
         <section class="card">
+            <h2>Integrationen</h2>
+            <div class="control-group">
+                <label for="notifyUrl">Status Endpoint (Basis-URL)</label>
+                <input id="notifyUrl" type="url" placeholder="http://10.124.42.5:5000/" />
+                <p>Bei Ereignissen wird ein POST auf <code>/queues/queue?name=SuMo:&lt;Aktion&gt;</code> ausgeführt.</p>
+            </div>
+        </section>
+
+        <section class="card">
             <h2>Poller Überfahrt</h2>
             <div class="quick-actions">
                 <button data-action="armOverrun">Überfahrt aktivieren</button>
@@ -93,6 +102,16 @@
                     <label for="configOverrunCooldown">Cooldown (ms)</label>
                     <input id="configOverrunCooldown" type="number" step="100" />
                 </div>
+                <div class="control-group">
+                    <label for="configAutoLower">Poller Delay (ms)</label>
+                    <div class="inline">
+                        <input id="configAutoLower" type="number" step="1000" min="0" disabled />
+                        <label>
+                            <input id="configAutoLowerEnabled" type="checkbox" />
+                            <span>aktiv</span>
+                        </label>
+                    </div>
+                </div>
             </div>
             <div class="quick-actions config-actions">
                 <button data-action="saveConfig">Parameter speichern</button>
@@ -122,7 +141,9 @@
                 <div class="status-row"><span>Ping:</span><strong id="pingInfo">–</strong></div>
                 <div class="status-row"><span>Status-Intervall:</span><strong id="statusInterval">–</strong></div>
                 <div class="status-row"><span>Cooldown (ms):</span><strong id="statusCooldown">–</strong></div>
-                <div class="status-row"><span>Match Restzeit:</span><strong id="remaining">–</strong></div>
+                <div class="status-row"><span>Match Zeit:</span><strong id="remaining">–</strong></div>
+                <div class="status-row"><span>Matchtyp:</span><strong id="matchType">–</strong></div>
+                <div class="status-row"><span>Poller Delay:</span><strong id="pollerDelay">–</strong></div>
                 <div class="status-row"><span>Letzte Aktion:</span><strong id="lastAction">–</strong></div>
                 <div class="status-row"><span>Überfahrt bereit:</span><strong id="overrunArmed">–</strong></div>
                 <div class="status-row"><span>Überfahrt erkannt:</span><strong id="overrunDetected">–</strong></div>
@@ -152,6 +173,8 @@
             statusInterval: document.getElementById('statusInterval'),
             statusCooldown: document.getElementById('statusCooldown'),
             remaining: document.getElementById('remaining'),
+            matchType: document.getElementById('matchType'),
+            pollerDelay: document.getElementById('pollerDelay'),
             lastAction: document.getElementById('lastAction'),
             overrunArmed: document.getElementById('overrunArmed'),
             overrunDetected: document.getElementById('overrunDetected'),
@@ -166,8 +189,100 @@
             stepperMaxSpeed: document.getElementById('configStepperMaxSpeed'),
             stepperAcceleration: document.getElementById('configStepperAcceleration'),
             statusIntervalMs: document.getElementById('configStatusInterval'),
-            overrunCooldownMs: document.getElementById('configOverrunCooldown')
+            overrunCooldownMs: document.getElementById('configOverrunCooldown'),
+            autoLowerMs: document.getElementById('configAutoLower')
         };
+
+        const autoLowerEnabledToggle = document.getElementById('configAutoLowerEnabled');
+        const DEFAULT_AUTO_LOWER_MS = 3000;
+        const DEFAULT_NOTIFY_URL = 'http://10.124.42.5:5000/';
+        const notifyUrlInput = document.getElementById('notifyUrl');
+        const lastStatusSnapshot = {
+            overrunDetected: null,
+            overrunArmed: null,
+            cooldown: null,
+            target: null,
+            state: null,
+            lastAction: null,
+            autoLowerMs: null,
+            notifyUrl: null
+        };
+
+        function isInputDirty(input) {
+            return !!(input && input.dataset.userDirty === 'true');
+        }
+
+        function clearInputDirty(input) {
+            if (input) {
+                delete input.dataset.userDirty;
+            }
+        }
+
+        function consoleLog(level, message, details) {
+            const methodMap = {
+                info: 'log',
+                success: 'log',
+                error: 'error',
+                debug: 'debug',
+                warn: 'warn'
+            };
+            const methodName = methodMap[level] || level;
+            const logger = console[methodName] ? console[methodName].bind(console) : console.log.bind(console);
+            if (details !== undefined) {
+                logger(`[UI] ${message}`, details);
+            } else {
+                logger(`[UI] ${message}`);
+            }
+        }
+
+        if (configInputs.overrunCooldownMs) {
+            configInputs.overrunCooldownMs.value = 20000;
+        }
+        if (configInputs.autoLowerMs) {
+            configInputs.autoLowerMs.value = DEFAULT_AUTO_LOWER_MS;
+        }
+
+        Object.values(configInputs).forEach((input) => {
+            if (!input) {
+                return;
+            }
+            input.addEventListener('input', () => {
+                input.dataset.userDirty = 'true';
+            });
+        });
+
+        if (notifyUrlInput) {
+            if (!notifyUrlInput.value) {
+                notifyUrlInput.value = DEFAULT_NOTIFY_URL;
+            }
+            notifyUrlInput.addEventListener('input', () => {
+                notifyUrlInput.dataset.userDirty = 'true';
+            });
+        }
+
+        function setAutoLowerEnabled(enabled) {
+            if (!autoLowerEnabledToggle || !configInputs.autoLowerMs) {
+                return;
+            }
+            autoLowerEnabledToggle.checked = enabled;
+            configInputs.autoLowerMs.disabled = !enabled;
+            if (
+                enabled &&
+                (!configInputs.autoLowerMs.value || Number(configInputs.autoLowerMs.value) === 0) &&
+                !isInputDirty(configInputs.autoLowerMs)
+            ) {
+                configInputs.autoLowerMs.value = DEFAULT_AUTO_LOWER_MS;
+            }
+        }
+
+        setAutoLowerEnabled(false);
+
+        if (autoLowerEnabledToggle) {
+            autoLowerEnabledToggle.addEventListener('change', () => {
+                autoLowerEnabledToggle.dataset.userDirty = 'true';
+                setAutoLowerEnabled(autoLowerEnabledToggle.checked);
+            });
+        }
 
         const logList = document.getElementById('log');
         const logTemplate = document.getElementById('log-entry-template');
@@ -180,80 +295,162 @@
             while (logList.children.length > 12) {
                 logList.removeChild(logList.lastChild);
             }
+            consoleLog(type, message);
         }
 
         async function sendCommand(type, extra = {}) {
             const payload = new URLSearchParams({ type, ...extra });
 
+            consoleLog('debug', `POST /api/command type=${type}`, Object.fromEntries(payload));
             try {
                 const response = await fetch('/api/command', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: payload
                 });
+                consoleLog('debug', `/api/command status ${response.status}`);
                 const data = await response.json();
+                consoleLog(response.ok && data.success ? 'success' : 'warn', `Command ${type} response`, data);
                 if (!response.ok || !data.success) {
                     throw new Error(data.error || 'Unbekannter Fehler');
                 }
                 log(`Kommando '${type}' gesendet`, 'success');
+                if (type === 'updateConfig') {
+                    Object.values(configInputs).forEach(clearInputDirty);
+                    clearInputDirty(notifyUrlInput);
+                    if (autoLowerEnabledToggle) {
+                        clearInputDirty(autoLowerEnabledToggle);
+                    }
+                }
             } catch (error) {
                 log(`Fehler bei '${type}': ${error.message}`, 'error');
+                consoleLog('error', `Command ${type} failed`, error);
             }
         }
 
-        function formatRemaining(ms) {
+        function formatMatchTime(ms, matchType, running) {
             if (typeof ms !== 'number') {
                 return '–';
             }
+
             const seconds = Math.max(0, Math.floor(ms / 1000));
             const minutes = Math.floor(seconds / 60);
             const rest = seconds % 60;
-            return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+            const base = `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+
+            if (matchType === 'death' && running) {
+                return `${base} ↑`;
+            }
+            return base;
         }
 
         async function updateStatus() {
             try {
+                consoleLog('debug', 'Polling /api/status');
                 const response = await fetch('/api/status');
+                consoleLog('debug', `/api/status status ${response.status}`);
                 const data = await response.json();
+                consoleLog('debug', 'Status payload', data);
 
+                const matchType = data.matchType || 'unknown';
                 statusLabels.phase.textContent = data.phase || '–';
-                statusLabels.remaining.textContent = formatRemaining(data.remainingMs);
+                statusLabels.remaining.textContent = formatMatchTime(data.remainingMs, matchType, data.matchRunning);
                 statusLabels.lastAction.textContent = data.lastAction || '–';
 
                 if (!data.ready) {
                     statusLabels.state.textContent = 'keine Daten';
                     statusLabels.animation.textContent = '–';
-                statusLabels.position.textContent = '–';
-                statusLabels.flags.textContent = '–';
-                statusLabels.rssi.textContent = '–';
-                statusLabels.statusInterval.textContent = '–';
-                statusLabels.statusCooldown.textContent = '–';
-                statusLabels.ping.textContent = '–';
-                statusLabels.overrunArmed.textContent = '–';
-                statusLabels.overrunDetected.textContent = '–';
-                statusLabels.cooldown.textContent = '–';
-                Object.values(configInputs).forEach((input) => {
-                    if (input && document.activeElement !== input) {
-                        input.value = '';
+                    statusLabels.position.textContent = '–';
+                    statusLabels.flags.textContent = '–';
+                    statusLabels.rssi.textContent = '–';
+                    statusLabels.statusInterval.textContent = '–';
+                    statusLabels.statusCooldown.textContent = '–';
+                    statusLabels.matchType.textContent = '–';
+                    statusLabels.pollerDelay.textContent = '–';
+                    statusLabels.ping.textContent = '–';
+                    statusLabels.overrunArmed.textContent = '–';
+                    statusLabels.overrunDetected.textContent = '–';
+                    statusLabels.cooldown.textContent = '–';
+
+                    if (
+                        configInputs.overrunCooldownMs &&
+                        !configInputs.overrunCooldownMs.value &&
+                        !isInputDirty(configInputs.overrunCooldownMs)
+                    ) {
+                        configInputs.overrunCooldownMs.value = 20000;
                     }
-                });
-                return;
-            }
+                    if (
+                        configInputs.autoLowerMs &&
+                        !configInputs.autoLowerMs.value &&
+                        !isInputDirty(configInputs.autoLowerMs)
+                    ) {
+                        configInputs.autoLowerMs.value = DEFAULT_AUTO_LOWER_MS;
+                    }
+                    if (notifyUrlInput && !notifyUrlInput.value && !isInputDirty(notifyUrlInput)) {
+                        notifyUrlInput.value = DEFAULT_NOTIFY_URL;
+                    }
+                    lastStatusSnapshot.overrunDetected = null;
+                    lastStatusSnapshot.overrunArmed = null;
+                    lastStatusSnapshot.cooldown = null;
+                    lastStatusSnapshot.target = null;
+                    lastStatusSnapshot.state = null;
+                    lastStatusSnapshot.lastAction = null;
+                    lastStatusSnapshot.autoLowerMs = null;
+                    lastStatusSnapshot.notifyUrl = null;
+                    return;
+                }
 
                 statusLabels.state.textContent = data.state;
                 statusLabels.animation.textContent = data.animation;
                 statusLabels.position.textContent = `${data.position} / ${data.target}`;
                 statusLabels.flags.textContent = `0x${Number(data.flags).toString(16)}`;
                 statusLabels.rssi.textContent = `${data.rssi} dBm / ${data.emaRssi} dBm`;
+                statusLabels.matchType.textContent = matchType;
+                const autoLowerMs = Number(data.autoLowerMs ?? 0);
+                statusLabels.pollerDelay.textContent = autoLowerMs > 0 ? `${autoLowerMs} ms` : 'aus';
+                const toggleDirty = autoLowerEnabledToggle && isInputDirty(autoLowerEnabledToggle);
+                if (!toggleDirty) {
+                    setAutoLowerEnabled(autoLowerMs > 0);
+                }
+                if (configInputs.autoLowerMs && !isInputDirty(configInputs.autoLowerMs)) {
+                    if (autoLowerMs > 0 && document.activeElement !== configInputs.autoLowerMs) {
+                        configInputs.autoLowerMs.value = autoLowerMs;
+                        clearInputDirty(configInputs.autoLowerMs);
+                    } else if (
+                        autoLowerMs === 0 &&
+                        !autoLowerEnabledToggle.checked &&
+                        !configInputs.autoLowerMs.value
+                    ) {
+                        configInputs.autoLowerMs.value = DEFAULT_AUTO_LOWER_MS;
+                        clearInputDirty(configInputs.autoLowerMs);
+                    }
+                }
+                if (notifyUrlInput && document.activeElement !== notifyUrlInput && !isInputDirty(notifyUrlInput)) {
+                    if (data.notifyUrl) {
+                        notifyUrlInput.value = data.notifyUrl;
+                    } else {
+                        notifyUrlInput.value = '';
+                    }
+                    clearInputDirty(notifyUrlInput);
+                }
+
                 if (data.config) {
                     statusLabels.statusInterval.textContent = data.config.statusIntervalMs ?? '–';
                     statusLabels.statusCooldown.textContent = data.config.overrunCooldownMs ?? '–';
                     Object.entries(configInputs).forEach(([key, input]) => {
-                        if (!input || (document.activeElement === input && input.type === 'number')) {
+                        if (
+                            !input ||
+                            (document.activeElement === input && input.type === 'number') ||
+                            isInputDirty(input)
+                        ) {
                             return;
                         }
-                        if (data.config[key] !== undefined) {
+                        if (key === 'autoLowerMs') {
+                            input.value = autoLowerMs;
+                            clearInputDirty(input);
+                        } else if (data.config[key] !== undefined) {
                             input.value = data.config[key];
+                            clearInputDirty(input);
                         }
                     });
                 } else {
@@ -273,6 +470,64 @@
                 statusLabels.overrunArmed.textContent = data.overrunArmed ? 'ja' : 'nein';
                 statusLabels.overrunDetected.textContent = data.overrunDetected ? 'ja' : 'nein';
                 statusLabels.cooldown.textContent = data.cooldown ? 'aktiv' : 'aus';
+
+                if (lastStatusSnapshot.overrunDetected !== data.overrunDetected) {
+                    if (data.overrunDetected) {
+                        const reason = autoLowerMs > 0
+                            ? `Auto-Raise geplant in ${autoLowerMs} ms`
+                            : 'Kein Auto-Raise (Poller Delay aus)';
+                        consoleLog('warn', `Überfahrt-Sensor aktiv (${reason})`, {
+                            cooldown: data.cooldown,
+                            overrunArmed: data.overrunArmed
+                        });
+                    } else if (lastStatusSnapshot.overrunDetected !== null) {
+                        consoleLog('info', 'Überfahrt-Sensor frei', {
+                            cooldown: data.cooldown,
+                            overrunArmed: data.overrunArmed
+                        });
+                    }
+                }
+
+                if (lastStatusSnapshot.overrunArmed !== data.overrunArmed) {
+                    consoleLog('info', `Überfahrt ${data.overrunArmed ? 'armed' : 'disarmed'}`, {
+                        cooldown: data.cooldown,
+                        autoLowerMs
+                    });
+                }
+
+                if (lastStatusSnapshot.cooldown !== data.cooldown) {
+                    consoleLog('info', `Cooldown ${data.cooldown ? 'aktiv' : 'deaktiviert'}`);
+                }
+
+                if (lastStatusSnapshot.lastAction !== data.lastAction && data.lastAction) {
+                    consoleLog('info', `Letzte Aktion: ${data.lastAction}`, {
+                        phase: data.phase,
+                        matchType
+                    });
+                }
+
+                if (lastStatusSnapshot.target !== data.target) {
+                    consoleLog('info', `Zielposition geändert: ${data.target}`, {
+                        state: data.state,
+                        lastAction: data.lastAction,
+                        autoLowerMs
+                    });
+                }
+
+                if (lastStatusSnapshot.notifyUrl !== data.notifyUrl) {
+                    consoleLog('info', 'Webhook-Endpoint aktualisiert', {
+                        url: data.notifyUrl || '(leer)'
+                    });
+                }
+
+                lastStatusSnapshot.overrunDetected = data.overrunDetected;
+                lastStatusSnapshot.overrunArmed = data.overrunArmed;
+                lastStatusSnapshot.cooldown = data.cooldown;
+                lastStatusSnapshot.target = data.target;
+                lastStatusSnapshot.state = data.state;
+                lastStatusSnapshot.lastAction = data.lastAction;
+                lastStatusSnapshot.autoLowerMs = autoLowerMs;
+                lastStatusSnapshot.notifyUrl = data.notifyUrl;
             } catch (error) {
                 statusLabels.state.textContent = 'Fehler';
                 statusLabels.overrunArmed.textContent = '–';
@@ -281,6 +536,10 @@
                 statusLabels.statusInterval.textContent = '–';
                 statusLabels.statusCooldown.textContent = '–';
                 statusLabels.ping.textContent = '–';
+                statusLabels.matchType.textContent = '–';
+                statusLabels.pollerDelay.textContent = '–';
+                setAutoLowerEnabled(false);
+                consoleLog('error', 'Status-Abfrage fehlgeschlagen', error);
             }
         }
 
@@ -312,10 +571,21 @@
             } else if (action === 'saveConfig') {
                 const payload = {};
                 Object.entries(configInputs).forEach(([key, input]) => {
+                    if (key === 'autoLowerMs') {
+                        return;
+                    }
                     if (input && input.value !== '') {
                         payload[key] = input.value;
                     }
                 });
+                if (autoLowerEnabledToggle && configInputs.autoLowerMs) {
+                    const enabled = autoLowerEnabledToggle.checked;
+                    const value = enabled ? Number(configInputs.autoLowerMs.value || DEFAULT_AUTO_LOWER_MS) : 0;
+                    payload.autoLowerMs = value.toString();
+                }
+                if (notifyUrlInput) {
+                    payload.webhookUrl = (notifyUrlInput.value || '').trim();
+                }
                 sendCommand('updateConfig', payload);
             } else {
                 sendCommand(action);

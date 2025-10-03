@@ -9,6 +9,142 @@
 #include "hardware_config.h"
 #include "poller_settings.h"
 
+namespace {
+
+const char* commandTypeToString(comms::CommandType type) {
+  switch (type) {
+    case comms::CommandType::kNoop:
+      return "noop";
+    case comms::CommandType::kMoveAbsolute:
+      return "move-absolute";
+    case comms::CommandType::kMoveRelative:
+      return "move-relative";
+    case comms::CommandType::kMoveToLimit:
+      return "move-limit";
+    case comms::CommandType::kStopStepper:
+      return "stop";
+    case comms::CommandType::kStartAnimation:
+      return "start-animation";
+    case comms::CommandType::kStopAnimation:
+      return "stop-animation";
+    case comms::CommandType::kCalibrate:
+      return "calibrate";
+    case comms::CommandType::kSetOverrunArmed:
+      return "set-overrun";
+    case comms::CommandType::kSetParameter:
+      return "set-parameter";
+    case comms::CommandType::kPing:
+      return "ping";
+  }
+  return "unknown";
+}
+
+const char* limitDirectionToString(comms::LimitDirection dir) {
+  switch (dir) {
+    case comms::LimitDirection::kDown:
+      return "down";
+    case comms::LimitDirection::kUp:
+      return "up";
+    case comms::LimitDirection::kNone:
+    default:
+      return "none";
+  }
+}
+
+const char* animationIdToString(comms::AnimationId id) {
+  switch (id) {
+    case comms::AnimationId::kNone:
+      return "none";
+    case comms::AnimationId::kCountdown:
+      return "countdown";
+    case comms::AnimationId::kPollerOverrun:
+      return "poller_overrun";
+    case comms::AnimationId::kArenaStop:
+      return "arena_stop";
+    case comms::AnimationId::kArenaControl:
+      return "arena_control";
+  }
+  return "unknown";
+}
+
+const char* parameterIdToString(comms::PollerParameterId id) {
+  switch (id) {
+    case comms::PollerParameterId::kPositionHome:
+      return "positionHome";
+    case comms::PollerParameterId::kPositionUpTarget:
+      return "positionUpTarget";
+    case comms::PollerParameterId::kPositionDownTarget:
+      return "positionDownTarget";
+    case comms::PollerParameterId::kDownArmMargin:
+      return "downArmMargin";
+    case comms::PollerParameterId::kStepperMaxSpeed:
+      return "stepperMaxSpeed";
+    case comms::PollerParameterId::kStepperAcceleration:
+      return "stepperAcceleration";
+    case comms::PollerParameterId::kStatusIntervalMs:
+      return "statusIntervalMs";
+    case comms::PollerParameterId::kOverrunCooldownMs:
+      return "overrunCooldownMs";
+    case comms::PollerParameterId::kCount:
+    default:
+      return "unknown";
+  }
+}
+
+enum PublishReason : uint32_t {
+  kReasonNone = 0,
+  kReasonStartup = 1u << 0,
+  kReasonSensorChange = 1u << 1,
+  kReasonCooldownToggle = 1u << 2,
+  kReasonEndstopEvent = 1u << 3,
+  kReasonCommandHandled = 1u << 4,
+  kReasonManualReleased = 1u << 5,
+  kReasonArmingChange = 1u << 6,
+  kReasonPositionChange = 1u << 7
+};
+
+void logPublishReasons(uint32_t mask) {
+  if (mask == kReasonNone) {
+    return;
+  }
+  Serial.print("[Poller] Publishing status (reasons: ");
+  bool first = true;
+  auto emit = [&](const char* text) {
+    if (!first) {
+      Serial.print(", ");
+    }
+    Serial.print(text);
+    first = false;
+  };
+  if (mask & kReasonStartup) {
+    emit("startup");
+  }
+  if (mask & kReasonSensorChange) {
+    emit("sensor");
+  }
+  if (mask & kReasonCooldownToggle) {
+    emit("cooldown");
+  }
+  if (mask & kReasonEndstopEvent) {
+    emit("endstop");
+  }
+  if (mask & kReasonCommandHandled) {
+    emit("command");
+  }
+  if (mask & kReasonManualReleased) {
+    emit("manual");
+  }
+  if (mask & kReasonArmingChange) {
+    emit("arming");
+  }
+  if (mask & kReasonPositionChange) {
+    emit("position");
+  }
+  Serial.println(")");
+}
+
+}  // namespace
+
 namespace poller {
 
 PollerController* PollerController::instance_ = nullptr;
@@ -16,26 +152,39 @@ PollerController* PollerController::instance_ = nullptr;
 void PollerController::begin() {
   instance_ = this;
 
+  Serial.println("[Poller] Initialising poller controller");
+
   pinMode(static_cast<uint8_t>(hardware::PIN_POLLER_SENSOR), INPUT);
   pollerSensorLatched_ = digitalRead(static_cast<uint8_t>(hardware::PIN_POLLER_SENSOR)) == LOW;
   overrunArmed_ = isPollerLowered();
   overrunLatched_ = false;
   lastOverrunMs_ = 0;
   cooldownWasActive_ = false;
+  wasLowered_ = isPollerLowered();
+  wasRaised_ = isPollerRaised();
+
+  Serial.printf("[Poller] Sensor initial state: %s\n", pollerSensorLatched_ ? "active" : "idle");
+  Serial.printf("[Poller] Initial overrun armed: %s\n", overrunArmed_ ? "yes" : "no");
 
   hardware::PollerParameters stored = hardware::DEFAULT_POLLER_PARAMETERS;
   if (settings::loadParameters(&stored)) {
     config_ = hardware::sanitized(stored);
+    Serial.println("[Poller] Parameters loaded from NVS");
   } else {
     config_ = hardware::DEFAULT_POLLER_PARAMETERS;
     settings::saveParameters(config_);
+    Serial.println("[Poller] Using default parameters");
   }
+  Serial.printf("[Poller] Cooldown default %lu ms, down target %ld\n",
+                static_cast<unsigned long>(config_.overrunCooldownMs),
+                static_cast<long>(config_.positionDownTarget));
 
   stepper_.begin(config_);
   leds_.begin();
 
   stepper_.startCalibration();
   status_.state = comms::PollerState::kCalibrating;
+  Serial.println("[Poller] Calibration initiated");
 
   status_.activeAnimation = comms::AnimationId::kNone;
   status_.lastCommandId = 0;
@@ -45,7 +194,9 @@ void PollerController::begin() {
   status_.config = config_;
 
   if (!comms::beginEspNow()) {
-    Serial.println("ESP-NOW initialisation failed");
+    Serial.println("[Poller] ESP-NOW initialisation failed");
+  } else {
+    Serial.println("[Poller] ESP-NOW initialised");
   }
 
   comms::setReceiveHandler(&PollerController::onEspNowReceive);
@@ -54,8 +205,9 @@ void PollerController::begin() {
   comms::addPeer(comms::PULT_MAC);
   memcpy(pultAddress_, comms::PULT_MAC, sizeof(pultAddress_));
   hasPeer_ = true;
+  Serial.println("[Poller] Default peer configured");
 
-  publishStatus(true);
+  publishStatus(true, kReasonStartup);
 }
 
 void PollerController::loop() {
@@ -64,6 +216,7 @@ void PollerController::loop() {
   const bool endstopEvent = stepper_.consumeEndstopEvent();
   const uint32_t now = millis();
   bool forcePublish = false;
+  uint32_t publishMask = kReasonNone;
 
   const bool sensorActive = digitalRead(static_cast<uint8_t>(hardware::PIN_POLLER_SENSOR)) == LOW;
   if (sensorActive != pollerSensorLatched_) {
@@ -71,17 +224,32 @@ void PollerController::loop() {
     lastPollerSensorChangeMs_ = now;
 
     if (sensorActive) {
-      if (overrunArmed_ && isPollerLowered()) {
+      const bool lowered = isPollerLowered();
+      Serial.printf("[Poller] Sensor triggered (armed=%s, lowered=%s)\n", overrunArmed_ ? "yes" : "no",
+                    lowered ? "yes" : "no");
+      if (lowered) {
         overrunLatched_ = true;
-        overrunArmed_ = false;
+        if (overrunArmed_) {
+          overrunArmed_ = false;
+          publishMask |= kReasonArmingChange;
+        }
+        lastOverrunMs_ = now;
+        cooldownWasActive_ = true;
+        publishMask |= kReasonCooldownToggle;
+        Serial.println("[Poller] Overrun latched; cooldown started");
       }
+    } else {
+      Serial.println("[Poller] Sensor released");
     }
     forcePublish = true;
+    publishMask |= kReasonSensorChange;
   }
 
   if (overrunArmed_ && !isPollerLowered()) {
     overrunArmed_ = false;
+    Serial.println("[Poller] Overrun disarmed because poller left lower zone");
     forcePublish = true;
+    publishMask |= kReasonArmingChange;
   }
 
   if (stepper_.isCalibrating()) {
@@ -95,17 +263,40 @@ void PollerController::loop() {
   const bool cooldownNow = cooldownActive(now);
   if (cooldownWasActive_ != cooldownNow) {
     cooldownWasActive_ = cooldownNow;
+    Serial.printf("[Poller] Cooldown %s\n", cooldownNow ? "active" : "cleared");
     forcePublish = true;
+    publishMask |= kReasonCooldownToggle;
   }
 
   if (endstopEvent) {
+    Serial.println("[Poller] Endstop event detected");
     forcePublish = true;
+    publishMask |= kReasonEndstopEvent;
   }
 
   if (manualControlActive_) {
-    if (!stepper_.isBusy() && (now - manualControlLastMs_) > 250U) {
+    if (!stepper_.isBusy() && (now - manualControlLastMs_) > 50U) {
       manualControlActive_ = false;
+      Serial.println("[Poller] Manual control released");
+      forcePublish = true;
+      publishMask |= kReasonManualReleased;
     }
+  }
+
+  const bool loweredNow = isPollerLowered();
+  if (loweredNow != wasLowered_) {
+    wasLowered_ = loweredNow;
+    Serial.printf("[Poller] Poller %s lower position\n", loweredNow ? "reached" : "left");
+    forcePublish = true;
+    publishMask |= kReasonPositionChange;
+  }
+
+  const bool raisedNow = isPollerRaised();
+  if (raisedNow != wasRaised_) {
+    wasRaised_ = raisedNow;
+    Serial.printf("[Poller] Poller %s upper position\n", raisedNow ? "reached" : "left");
+    forcePublish = true;
+    publishMask |= kReasonPositionChange;
   }
 
   LedController::Inputs ledInputs{};
@@ -116,10 +307,11 @@ void PollerController::loop() {
   ledInputs.overrunArmed = overrunArmed_;
   ledInputs.cooldownActive = cooldownActive(now);
   ledInputs.sensorActive = pollerSensorLatched_;
+  ledInputs.calibrating = stepper_.isCalibrating();
   leds_.applyInputs(ledInputs);
   leds_.update();
 
-  publishStatus(forcePublish);
+  publishStatus(forcePublish, publishMask);
 }
 
 void PollerController::onEspNowReceive(const uint8_t* mac, const uint8_t* data, int len, int8_t rssi) {
@@ -154,7 +346,14 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
   status_.lastCommandId = command.commandId;
   const uint32_t now = millis();
 
+  Serial.printf(
+      "[Poller] Command #%u type=%s value=%ld limit=%s animation=%s param=%u rssi=%d\n",
+      command.commandId, commandTypeToString(command.type), static_cast<long>(command.value),
+      limitDirectionToString(command.limit), animationIdToString(command.animation),
+      command.reserved, static_cast<int>(rssi));
+
   bool handled = true;
+  const char* rejectReason = nullptr;
 
   switch (command.type) {
     case comms::CommandType::kNoop:
@@ -165,12 +364,14 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       const int32_t current = stepper_.currentPosition();
       if (!stepper_.isCalibrated() && target < current) {
         handled = false;
+        rejectReason = "not calibrated for downward move";
         break;
       }
       const int32_t threshold = config_.positionDownTarget + config_.downArmMargin;
       if (target > threshold) {
         if (!canInitiateOverrun(now)) {
           handled = false;
+          rejectReason = "overrun cooldown active";
           break;
         }
         overrunArmed_ = false;
@@ -181,6 +382,7 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       status_.state = comms::PollerState::kMoving;
       manualControlActive_ = true;
       manualControlLastMs_ = now;
+      Serial.printf("[Poller] Manual absolute move to %ld initiated\n", static_cast<long>(target));
       break;
     }
     case comms::CommandType::kMoveRelative: {
@@ -188,12 +390,14 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       const int32_t target = current + command.value;
       if (!stepper_.isCalibrated() && command.value < 0) {
         handled = false;
+        rejectReason = "not calibrated for downward move";
         break;
       }
       const int32_t threshold = config_.positionDownTarget + config_.downArmMargin;
       if (command.value > 0 && target > threshold) {
         if (!canInitiateOverrun(now)) {
           handled = false;
+          rejectReason = "overrun cooldown active";
           break;
         }
         overrunArmed_ = false;
@@ -204,24 +408,25 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
       status_.state = comms::PollerState::kMoving;
       manualControlActive_ = true;
       manualControlLastMs_ = now;
+      Serial.printf("[Poller] Manual relative move delta=%ld initiated\n", static_cast<long>(command.value));
       break;
     }
     case comms::CommandType::kMoveToLimit:
       if (command.limit == comms::LimitDirection::kNone) {
         handled = false;
+        rejectReason = "missing direction";
       } else {
         if (command.limit == comms::LimitDirection::kDown && !stepper_.isCalibrated()) {
           handled = false;
+          rejectReason = "not calibrated for down";
           break;
         }
         if (command.limit == comms::LimitDirection::kUp) {
-          if (!canInitiateOverrun(now)) {
-            handled = false;
-            break;
+          if (!cooldownActive(now)) {
+            lastOverrunMs_ = now;
+            cooldownWasActive_ = true;
           }
           overrunArmed_ = false;
-          lastOverrunMs_ = now;
-          cooldownWasActive_ = true;
         }
         stepper_.moveToLimit(command.limit);
         status_.state = comms::PollerState::kMoving;
@@ -229,20 +434,26 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
         if (!autoRaise) {
           manualControlActive_ = true;
           manualControlLastMs_ = now;
+          Serial.printf("[Poller] Manual limit move (%s) initiated\n",
+                        limitDirectionToString(command.limit));
         }
       }
       break;
     case comms::CommandType::kStopStepper:
       stepper_.stop();
       status_.state = comms::PollerState::kIdle;
+      Serial.println("[Poller] Stop stepper command handled");
       break;
     case comms::CommandType::kStartAnimation:
+      Serial.printf("[Poller] Start animation %s\n", animationIdToString(command.animation));
       leds_.startAnimation(command.animation);
       break;
     case comms::CommandType::kStopAnimation:
+      Serial.println("[Poller] Stop animation command");
       leds_.stopAnimation();
       break;
     case comms::CommandType::kCalibrate:
+      Serial.println("[Poller] Calibration command received");
       stepper_.startCalibration();
       status_.state = comms::PollerState::kCalibrating;
       break;
@@ -259,20 +470,35 @@ void PollerController::handleCommand(const comms::PollerCommand& command, int8_t
     }
     default:
       handled = false;
+      rejectReason = "unsupported command";
       break;
   }
 
   if (!handled) {
+    Serial.printf("[Poller] Command #%u rejected: %s\n", command.commandId,
+                  rejectReason ? rejectReason : "unknown reason");
     status_.statusFlags |= static_cast<uint16_t>(comms::StatusFlag::kCommandError);
+  } else {
+    Serial.printf("[Poller] Command #%u completed\n", command.commandId);
   }
 
-  publishStatus(true);
+  publishStatus(true, kReasonCommandHandled);
 }
 
-void PollerController::publishStatus(bool force) {
+void PollerController::publishStatus(bool force, uint32_t reasonMask) {
   const uint32_t now = millis();
   if (!force && (now - lastStatusSentMs_) < config_.statusIntervalMs) {
     return;
+  }
+
+  if (force) {
+    if (reasonMask == kReasonNone) {
+      Serial.println("[Poller] Publishing status (forced)");
+    } else {
+      logPublishReasons(reasonMask);
+    }
+  } else {
+    Serial.println("[Poller] Publishing status (interval)");
   }
 
   status_.uptimeMs = now;
@@ -307,10 +533,11 @@ void PollerController::refreshStatusFlags(uint32_t now) {
   }
   const bool lowered = isPollerLowered();
   const bool cooldown = cooldownActive(now);
+  if (cooldown) {
+    flags |= static_cast<uint16_t>(comms::StatusFlag::kCooldownActive);
+  }
   if (overrunArmed_ && lowered && !cooldown) {
     flags |= static_cast<uint16_t>(comms::StatusFlag::kOverrunArmed);
-  } else {
-    flags |= static_cast<uint16_t>(comms::StatusFlag::kCooldownActive);
   }
   if (!isnan(emaRssi_) && emaRssi_ < -90.0f) {
     flags |= static_cast<uint16_t>(comms::StatusFlag::kLinkLowQuality);
@@ -356,14 +583,17 @@ bool PollerController::canInitiateOverrun(uint32_t now) {
 bool PollerController::setOverrunArmed(bool armed, uint32_t now) {
   if (armed) {
     if (cooldownActive(now)) {
+      Serial.println("[Poller] Reject arming: cooldown active");
       return false;
     }
     if (!isPollerLowered()) {
+      Serial.println("[Poller] Reject arming: poller not lowered");
       return false;
     }
 
     const bool sensorNow = digitalRead(static_cast<uint8_t>(hardware::PIN_POLLER_SENSOR)) == LOW;
     if (sensorNow) {
+      Serial.println("[Poller] Reject arming: sensor already active");
       overrunLatched_ = true;
       overrunArmed_ = false;
       lastOverrunMs_ = now;
@@ -375,10 +605,12 @@ bool PollerController::setOverrunArmed(bool armed, uint32_t now) {
     overrunArmed_ = true;
     lastOverrunMs_ = 0;
     cooldownWasActive_ = false;
+    Serial.println("[Poller] Overrun armed");
     return true;
   }
 
   overrunArmed_ = false;
+  Serial.println("[Poller] Overrun disarmed by command");
   return true;
 }
 
@@ -388,15 +620,19 @@ bool PollerController::handleParameterUpdate(comms::PollerParameterId id, int32_
   switch (id) {
     case comms::PollerParameterId::kPositionHome:
       updated.positionHome = rawValue;
+      Serial.printf("[Poller] Parameter preview positionHome=%ld\n", static_cast<long>(rawValue));
       break;
     case comms::PollerParameterId::kPositionUpTarget:
       updated.positionUpTarget = rawValue;
+      Serial.printf("[Poller] Parameter preview positionUpTarget=%ld\n", static_cast<long>(rawValue));
       break;
     case comms::PollerParameterId::kPositionDownTarget:
       updated.positionDownTarget = rawValue;
+      Serial.printf("[Poller] Parameter preview positionDownTarget=%ld\n", static_cast<long>(rawValue));
       break;
     case comms::PollerParameterId::kDownArmMargin:
       updated.downArmMargin = rawValue;
+      Serial.printf("[Poller] Parameter preview downArmMargin=%ld\n", static_cast<long>(rawValue));
       break;
     case comms::PollerParameterId::kStepperMaxSpeed: {
       float value = 0.0f;
@@ -406,6 +642,7 @@ bool PollerController::handleParameterUpdate(comms::PollerParameterId id, int32_
         return false;
       }
       updated.stepperMaxSpeed = value;
+      Serial.printf("[Poller] Parameter preview stepperMaxSpeed=%0.2f\n", value);
       break;
     }
     case comms::PollerParameterId::kStepperAcceleration: {
@@ -416,6 +653,7 @@ bool PollerController::handleParameterUpdate(comms::PollerParameterId id, int32_
         return false;
       }
       updated.stepperAcceleration = value;
+      Serial.printf("[Poller] Parameter preview stepperAcceleration=%0.2f\n", value);
       break;
     }
     case comms::PollerParameterId::kStatusIntervalMs:
@@ -423,12 +661,14 @@ bool PollerController::handleParameterUpdate(comms::PollerParameterId id, int32_
         return false;
       }
       updated.statusIntervalMs = static_cast<uint32_t>(rawValue);
+      Serial.printf("[Poller] Parameter preview statusIntervalMs=%ld\n", static_cast<long>(rawValue));
       break;
     case comms::PollerParameterId::kOverrunCooldownMs:
       if (rawValue <= 0) {
         return false;
       }
       updated.overrunCooldownMs = static_cast<uint32_t>(rawValue);
+      Serial.printf("[Poller] Parameter preview overrunCooldownMs=%ld\n", static_cast<long>(rawValue));
       break;
     default:
       recognised = false;
@@ -436,6 +676,8 @@ bool PollerController::handleParameterUpdate(comms::PollerParameterId id, int32_
   }
 
   if (!recognised) {
+    Serial.printf("[Poller] Parameter update rejected: %s (unrecognised)\n",
+                  parameterIdToString(id));
     return false;
   }
 
@@ -445,9 +687,10 @@ bool PollerController::handleParameterUpdate(comms::PollerParameterId id, int32_
   onConfigChanged();
 
   if (!settings::saveParameters(config_)) {
-    Serial.println("Parameter save failed");
+    Serial.println("[Poller] Parameter save failed");
     return false;
   }
+  Serial.printf("[Poller] Parameter %s updated\n", parameterIdToString(id));
   return true;
 }
 

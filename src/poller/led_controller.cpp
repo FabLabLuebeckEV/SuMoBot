@@ -1,6 +1,9 @@
 #include "led_controller.h"
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 namespace poller {
 constexpr uint8_t LedController::kRingSizes[LedController::kRingCount];
@@ -20,6 +23,22 @@ constexpr uint32_t kCountdownAmberPhaseMs = 3000;
 constexpr uint32_t kCountdownBlinkAmberMs = 500;
 constexpr uint32_t kCountdownBlinkRedMs = 250;
 constexpr uint32_t kOverrunTriggeredResetDelayMs = 500;
+
+const char* animationName(comms::AnimationId id) {
+  switch (id) {
+    case comms::AnimationId::kNone:
+      return "none";
+    case comms::AnimationId::kCountdown:
+      return "countdown";
+    case comms::AnimationId::kPollerOverrun:
+      return "poller_overrun";
+    case comms::AnimationId::kArenaStop:
+      return "arena_stop";
+    case comms::AnimationId::kArenaControl:
+      return "arena_control";
+  }
+  return "unknown";
+}
 
 CRGB makeDim(const CRGB& color, uint8_t value) {
   CRGB result = color;
@@ -56,26 +75,51 @@ void LedController::begin() {
   lastArmedStepMs_ = modeStartMs_;
   lastWaveStepMs_ = modeStartMs_;
   overrunTriggerMs_ = 0;
+  lastShowMs_ = modeStartMs_;
+
+  requestedMode_ = Mode::kInit;
+  modeChangeRequested_ = false;
+  overrunTriggerRequested_ = false;
+  inputsPending_ = false;
+
+#if CONFIG_FREERTOS_UNICORE
+  const BaseType_t ledCore = 0;
+#else
+  const BaseType_t ledCore = 0;
+#endif
+  if (xTaskCreatePinnedToCore(&LedController::ledTaskTrampoline, "PollerLED", 4096, this, 2, &taskHandle_, ledCore) != pdPASS) {
+    taskHandle_ = nullptr;
+    Serial.println("[LedController] Failed to create LED task");
+  } else {
+    Serial.println("[LedController] LED task started");
+  }
+
+  Serial.println("[LedController] Controller initialised");
 }
 
 void LedController::applyInputs(const Inputs& inputs) {
-  inputs_ = inputs;
+  taskENTER_CRITICAL(&inputsMux_);
+  pendingInputs_ = inputs;
+  inputsPending_ = true;
+  taskEXIT_CRITICAL(&inputsMux_);
 }
 
 void LedController::startAnimation(comms::AnimationId id) {
+  Serial.printf("[LedController] Start animation: %s\n", animationName(id));
   switch (id) {
     case comms::AnimationId::kCountdown:
-      setMode(Mode::kCountdown);
+      requestMode(Mode::kCountdown);
       break;
     case comms::AnimationId::kArenaControl:
-      setMode(Mode::kMatch);
+      requestMode(Mode::kMatch);
       break;
     case comms::AnimationId::kArenaStop:
-      setMode(Mode::kStop);
+      requestMode(Mode::kStop);
       break;
     case comms::AnimationId::kPollerOverrun:
-      overrunTriggered_ = true;
-      overrunTriggerMs_ = millis();
+      taskENTER_CRITICAL(&stateMux_);
+      overrunTriggerRequested_ = true;
+      taskEXIT_CRITICAL(&stateMux_);
       break;
     case comms::AnimationId::kNone:
     default:
@@ -85,8 +129,12 @@ void LedController::startAnimation(comms::AnimationId id) {
 }
 
 void LedController::stopAnimation() {
-  setMode(Mode::kIdle);
+  Serial.println("[LedController] Stop animation");
+  requestMode(Mode::kIdle);
+  taskENTER_CRITICAL(&stateMux_);
   overrunTriggered_ = false;
+  overrunTriggerRequested_ = false;
+  taskEXIT_CRITICAL(&stateMux_);
 }
 
 comms::AnimationId LedController::activeAnimation() const {
@@ -108,29 +156,7 @@ comms::AnimationId LedController::activeAnimation() const {
 }
 
 void LedController::update() {
-  const uint32_t now = millis();
-
-  if (!lastInputs_.sensorActive && inputs_.sensorActive) {
-    overrunTriggered_ = true;
-    overrunTriggerMs_ = now;
-  }
-
-  if (overrunTriggered_ && inputs_.pollerIsUp && !inputs_.sensorActive && inputs_.overrunArmed) {
-    // keep a small delay before clearing to avoid flicker when motor still moving
-    if ((now - overrunTriggerMs_) > kOverrunTriggeredResetDelayMs) {
-      overrunTriggered_ = false;
-    }
-  }
-
-  if (mode_ == Mode::kStop && (now - modeStartMs_) > kStopModeHoldMs) {
-    setMode(Mode::kIdle);
-  }
-
-  render(now);
-  applyShow();
-
-  lastInputs_ = inputs_;
-  lastUpdateMs_ = now;
+  // LED updates are handled asynchronously by the FreeRTOS task.
 }
 
 void LedController::setMode(Mode mode) {
@@ -144,6 +170,7 @@ void LedController::setMode(Mode mode) {
   blinkAnchorMs_ = modeStartMs_;
   countdownBlinkPhase_ = false;
   dirty_ = true;
+  logModeChange(mode_, "request");
 
   if (mode_ == Mode::kCountdown) {
     overrunTriggered_ = false;
@@ -362,12 +389,117 @@ void LedController::resetStrips(const CRGB& color) {
   dirty_ = true;
 }
 
-void LedController::applyShow() {
+void LedController::applyShow(uint32_t nowMs) {
   if (!dirty_) {
     return;
   }
+  if ((nowMs - lastShowMs_) < kMinShowIntervalMs) {
+    return;
+  }
   FastLED.show();
+  lastShowMs_ = nowMs;
   dirty_ = false;
+}
+
+void LedController::requestMode(Mode mode) {
+  Serial.printf("[LedController] Mode request -> %s\n", modeName(mode));
+  taskENTER_CRITICAL(&stateMux_);
+  requestedMode_ = mode;
+  modeChangeRequested_ = true;
+  taskEXIT_CRITICAL(&stateMux_);
+}
+
+void LedController::ledTaskTrampoline(void* param) {
+  auto* self = static_cast<LedController*>(param);
+  self->taskLoop();
+}
+
+void LedController::taskLoop() {
+  const TickType_t delayTicks = pdMS_TO_TICKS(8);
+  while (true) {
+    const uint32_t now = millis();
+
+    taskENTER_CRITICAL(&inputsMux_);
+    if (inputsPending_) {
+      inputs_ = pendingInputs_;
+      inputsPending_ = false;
+    }
+    taskEXIT_CRITICAL(&inputsMux_);
+
+    bool applyMode = false;
+    Mode newMode = mode_;
+    bool triggerOverrun = false;
+    taskENTER_CRITICAL(&stateMux_);
+    if (modeChangeRequested_) {
+      newMode = requestedMode_;
+      modeChangeRequested_ = false;
+      applyMode = true;
+    }
+    if (overrunTriggerRequested_) {
+      triggerOverrun = true;
+      overrunTriggerRequested_ = false;
+    }
+    taskEXIT_CRITICAL(&stateMux_);
+
+    if (applyMode) {
+      Serial.printf("[LedController] Applying mode -> %s\n", modeName(newMode));
+      setMode(newMode);
+    }
+    if (triggerOverrun) {
+      overrunTriggered_ = true;
+      overrunTriggerMs_ = now;
+      Serial.println("[LedController] Overrun animation triggered (manual)");
+    }
+
+    if (!lastInputs_.sensorActive && inputs_.sensorActive) {
+      overrunTriggered_ = true;
+      overrunTriggerMs_ = now;
+      Serial.println("[LedController] Overrun animation triggered (sensor)");
+    }
+
+    if (overrunTriggered_ && inputs_.pollerIsUp && !inputs_.sensorActive && inputs_.overrunArmed) {
+      if ((now - overrunTriggerMs_) > kOverrunTriggeredResetDelayMs) {
+        overrunTriggered_ = false;
+        Serial.println("[LedController] Overrun animation reset");
+      }
+    }
+
+    if (mode_ == Mode::kStop && (now - modeStartMs_) > kStopModeHoldMs) {
+      setMode(Mode::kIdle);
+    }
+
+    render(now);
+    applyShow(now);
+
+    lastInputs_ = inputs_;
+    lastUpdateMs_ = now;
+
+    vTaskDelay(delayTicks);
+  }
+}
+
+const char* LedController::modeName(Mode mode) {
+  switch (mode) {
+    case Mode::kInit:
+      return "init";
+    case Mode::kIdle:
+      return "idle";
+    case Mode::kCountdown:
+      return "countdown";
+    case Mode::kMatch:
+      return "match";
+    case Mode::kStop:
+      return "stop";
+  }
+  return "unknown";
+}
+
+void LedController::logModeChange(Mode mode, const char* reason) {
+  Serial.printf("[LedController] Mode -> %s", modeName(mode));
+  if (reason && reason[0] != '\0') {
+    Serial.printf(" (%s)", reason);
+  }
+  Serial.println();
 }
 
 }  // namespace poller

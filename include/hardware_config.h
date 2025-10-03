@@ -9,7 +9,7 @@ constexpr gpio_num_t PIN_POLLER_ENABLE = GPIO_NUM_13;
 constexpr gpio_num_t PIN_STEPPER_STEP  = GPIO_NUM_17;
 constexpr gpio_num_t PIN_STEPPER_DIR   = GPIO_NUM_16;
 constexpr gpio_num_t PIN_ENDSTOP       = GPIO_NUM_14;  // active low
-constexpr gpio_num_t PIN_POLLER_SENSOR = GPIO_NUM_36;  // analog capable, used digital
+constexpr gpio_num_t PIN_POLLER_SENSOR = GPIO_NUM_36;  // digital sensor input
 
 // LED strip pins and sizes
 constexpr gpio_num_t PIN_LED_RUNDUM = GPIO_NUM_25;
@@ -29,7 +29,7 @@ struct PollerParameters {
   float   stepperMaxSpeed = 45000.0f;
   float   stepperAcceleration = 2000.0f;
   uint32_t statusIntervalMs = 250;
-  uint32_t overrunCooldownMs = 3000;
+  uint32_t overrunCooldownMs = 20000;
 };
 
 constexpr PollerParameters DEFAULT_POLLER_PARAMETERS{};

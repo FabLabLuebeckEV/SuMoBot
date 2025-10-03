@@ -39,6 +39,8 @@ class StepperController {
   void updateEnablePin();
   void updateMotionProfile();
   const hardware::PollerParameters& config() const;
+  static const char* modeName(Mode mode);
+  void reportModeChange(Mode newMode, const char* reason = nullptr);
 
   AccelStepper stepper_{AccelStepper::DRIVER, hardware::PIN_STEPPER_STEP, hardware::PIN_STEPPER_DIR};
   Mode mode_ = Mode::kIdle;
@@ -47,6 +49,7 @@ class StepperController {
   bool calibrated_ = false;
   bool calibrationBackoffActive_ = false;
   hardware::PollerParameters configCache_ = hardware::DEFAULT_POLLER_PARAMETERS;
+  Mode lastReportedMode_ = Mode::kIdle;
 };
 
 }  // namespace poller

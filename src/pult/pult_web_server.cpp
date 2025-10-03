@@ -20,8 +20,8 @@ const AsyncWebParameter* findParam(AsyncWebServerRequest* request, const char* n
 }
 }
 
-PultWebServer::PultWebServer(PultController& controller, MatchOrchestrator& orchestrator)
-    : server_(80), controller_(controller), orchestrator_(orchestrator) {}
+PultWebServer::PultWebServer(PultController& controller, MatchOrchestrator& orchestrator, StatusNotifier& notifier)
+    : server_(80), controller_(controller), orchestrator_(orchestrator), notifier_(notifier) {}
 
 void PultWebServer::begin() {
   if (!LittleFS.begin()) {
@@ -160,6 +160,8 @@ void PultWebServer::handleCommandRequest(AsyncWebServerRequest* request) {
     hardware::PollerParameters requested = controller_.hasStatus()
                                              ? controller_.status().config
                                              : hardware::DEFAULT_POLLER_PARAMETERS;
+    uint32_t autoLowerMs = orchestrator_.autoLowerDelayMs();
+    String webhookUrl = notifier_.endpoint();
 
     auto requireInt32 = [&](const char* name, int32_t* target) {
       const AsyncWebParameter* param = findParam(request, name);
@@ -211,6 +213,23 @@ void PultWebServer::handleCommandRequest(AsyncWebServerRequest* request) {
     parsed &= requireUint32("statusIntervalMs", &requested.statusIntervalMs);
     parsed &= requireUint32("overrunCooldownMs", &requested.overrunCooldownMs);
 
+    const AsyncWebParameter* autoLowerParam = findParam(request, "autoLowerMs");
+    if (autoLowerParam) {
+      long value = autoLowerParam->value().toInt();
+      if (value < 0) {
+        error = "Invalid value for autoLowerMs";
+        parsed = false;
+      } else {
+        autoLowerMs = static_cast<uint32_t>(value);
+      }
+    }
+
+    const AsyncWebParameter* webhookParam = findParam(request, "webhookUrl");
+    if (webhookParam) {
+      webhookUrl = webhookParam->value();
+      webhookUrl.trim();
+    }
+
     if (!parsed) {
       success = false;
     } else {
@@ -230,6 +249,12 @@ void PultWebServer::handleCommandRequest(AsyncWebServerRequest* request) {
       sent &= controller_.sendSetParameter(comms::PollerParameterId::kStepperAcceleration, encodeFloat(requested.stepperAcceleration));
       sent &= controller_.sendSetParameter(comms::PollerParameterId::kStatusIntervalMs, static_cast<int32_t>(requested.statusIntervalMs));
       sent &= controller_.sendSetParameter(comms::PollerParameterId::kOverrunCooldownMs, static_cast<int32_t>(requested.overrunCooldownMs));
+
+      if (sent) {
+        orchestrator_.setAutoLowerDelayMs(autoLowerMs);
+      }
+
+      notifier_.setEndpoint(webhookUrl);
 
       success = sent;
       if (!success) {
@@ -253,13 +278,16 @@ void PultWebServer::handleCommandRequest(AsyncWebServerRequest* request) {
 
 void PultWebServer::handleStatusRequest(AsyncWebServerRequest* request) {
   String json;
-  json.reserve(320);
+  json.reserve(400);
   const uint32_t now = millis();
   json += "{\"phase\":\"";
   json += phaseToString(orchestrator_.phase());
   json += "\"";
   json += ",\"matchRunning\":";
   json += orchestrator_.matchRunning() ? "true" : "false";
+  json += ",\"matchType\":\"";
+  json += matchTypeToString(orchestrator_.matchType());
+  json += "\"";
   json += ",\"countdown\":";
   json += orchestrator_.countdownActive() ? "true" : "false";
   json += ",\"remainingMs\":";
@@ -269,6 +297,18 @@ void PultWebServer::handleStatusRequest(AsyncWebServerRequest* request) {
   json += "\"";
   json += ",\"ready\":";
   json += controller_.hasStatus() ? "true" : "false";
+  json += ",\"notifyUrl\":";
+  if (notifier_.enabled()) {
+    String url = notifier_.endpoint();
+    url.replace("\"", "\\\"");
+    json += "\"";
+    json += url;
+    json += "\"";
+  } else {
+    json += "null";
+  }
+  json += ",\"autoLowerMs\":";
+  json += orchestrator_.autoLowerDelayMs();
 
   if (controller_.hasStatus()) {
     const comms::PollerStatus& status = controller_.status();
@@ -412,6 +452,18 @@ String PultWebServer::phaseToString(MatchOrchestrator::Phase phase) const {
       return "running";
   }
   return "unknown";
+}
+
+String PultWebServer::matchTypeToString(MatchOrchestrator::MatchType type) const {
+  switch (type) {
+    case MatchOrchestrator::MatchType::kNormal:
+      return "normal";
+    case MatchOrchestrator::MatchType::kDeath:
+      return "death";
+    case MatchOrchestrator::MatchType::kUnknown:
+    default:
+      return "unknown";
+  }
 }
 
 }  // namespace pult
