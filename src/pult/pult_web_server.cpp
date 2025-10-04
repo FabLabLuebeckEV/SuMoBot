@@ -91,14 +91,6 @@ void PultWebServer::handleCommandRequest(AsyncWebServerRequest* request) {
     orchestrator_.calibrate();
     success = true;
     error = "";
-  } else if (type == "armOverrun") {
-    orchestrator_.armPollerOverrun();
-    success = true;
-    error = "";
-  } else if (type == "disarmOverrun") {
-    orchestrator_.disarmPollerOverrun();
-    success = true;
-    error = "";
   } else if (type == "moveAbsolute") {
     const AsyncWebParameter* valueParam = findParam(request, "value");
     if (valueParam) {
@@ -334,8 +326,8 @@ void PultWebServer::handleStatusRequest(AsyncWebServerRequest* request) {
     json += status.emaRssi;
     json += ",\"ageMs\":";
     json += now - controller_.lastStatusTimestamp();
-    json += ",\"overrunArmed\":";
-    json += orchestrator_.pollerOverrunArmed() ? "true" : "false";
+    json += ",\"overrunReady\":";
+    json += orchestrator_.pollerOverrunReady() ? "true" : "false";
     json += ",\"overrunDetected\":";
     json += orchestrator_.pollerOverrunDetected() ? "true" : "false";
     json += ",\"cooldown\":";

@@ -4,6 +4,8 @@
 #include <EEPROM.h>
 #include <string.h>
 
+#include "poller/logging.h"
+
 namespace poller {
 namespace settings {
 namespace {
@@ -26,7 +28,7 @@ bool ensureInitialised() {
     return true;
   }
   if (!EEPROM.begin(kStorageSize)) {
-    Serial.println("EEPROM init failed");
+    POLLER_LOG_PRINTLN("EEPROM init failed");
     return false;
   }
   initialised = true;
@@ -74,7 +76,7 @@ bool saveParameters(const hardware::PollerParameters& params) {
 
   EEPROM.put(0, block);
   if (!EEPROM.commit()) {
-    Serial.println("EEPROM commit failed");
+    POLLER_LOG_PRINTLN("EEPROM commit failed");
     return false;
   }
   return true;

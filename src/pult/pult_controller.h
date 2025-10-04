@@ -20,7 +20,6 @@ class PultController {
   bool sendStartAnimation(comms::AnimationId animation);
   bool sendStopAnimation();
   bool sendCalibrate();
-  bool sendSetOverrunArmed(bool armed);
   bool sendSetParameter(comms::PollerParameterId id, int32_t rawValue);
   bool sendObserverMessage(const char* text);
 

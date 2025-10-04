@@ -34,14 +34,6 @@
         </section>
 
         <section class="card">
-            <h2>Poller Überfahrt</h2>
-            <div class="quick-actions">
-                <button data-action="armOverrun">Überfahrt aktivieren</button>
-                <button data-action="disarmOverrun">Cooldown starten</button>
-            </div>
-        </section>
-
-        <section class="card">
             <h2>Schrittmotor</h2>
             <div class="controls">
                 <div class="control-group">
@@ -145,7 +137,7 @@
                 <div class="status-row"><span>Matchtyp:</span><strong id="matchType">–</strong></div>
                 <div class="status-row"><span>Poller Delay:</span><strong id="pollerDelay">–</strong></div>
                 <div class="status-row"><span>Letzte Aktion:</span><strong id="lastAction">–</strong></div>
-                <div class="status-row"><span>Überfahrt bereit:</span><strong id="overrunArmed">–</strong></div>
+                <div class="status-row"><span>Überfahrt bereit:</span><strong id="overrunReady">–</strong></div>
                 <div class="status-row"><span>Überfahrt erkannt:</span><strong id="overrunDetected">–</strong></div>
                 <div class="status-row"><span>Cooldown aktiv:</span><strong id="cooldown">–</strong></div>
             </div>
@@ -176,7 +168,7 @@
             matchType: document.getElementById('matchType'),
             pollerDelay: document.getElementById('pollerDelay'),
             lastAction: document.getElementById('lastAction'),
-            overrunArmed: document.getElementById('overrunArmed'),
+            overrunReady: document.getElementById('overrunReady'),
             overrunDetected: document.getElementById('overrunDetected'),
             cooldown: document.getElementById('cooldown')
         };
@@ -199,7 +191,7 @@
         const notifyUrlInput = document.getElementById('notifyUrl');
         const lastStatusSnapshot = {
             overrunDetected: null,
-            overrunArmed: null,
+            overrunReady: null,
             cooldown: null,
             target: null,
             state: null,
@@ -236,7 +228,7 @@
         }
 
         if (configInputs.overrunCooldownMs) {
-            configInputs.overrunCooldownMs.value = 20000;
+            configInputs.overrunCooldownMs.value = 10000;
         }
         if (configInputs.autoLowerMs) {
             configInputs.autoLowerMs.value = DEFAULT_AUTO_LOWER_MS;
@@ -368,7 +360,7 @@
                     statusLabels.matchType.textContent = '–';
                     statusLabels.pollerDelay.textContent = '–';
                     statusLabels.ping.textContent = '–';
-                    statusLabels.overrunArmed.textContent = '–';
+                    statusLabels.overrunReady.textContent = '–';
                     statusLabels.overrunDetected.textContent = '–';
                     statusLabels.cooldown.textContent = '–';
 
@@ -377,7 +369,7 @@
                         !configInputs.overrunCooldownMs.value &&
                         !isInputDirty(configInputs.overrunCooldownMs)
                     ) {
-                        configInputs.overrunCooldownMs.value = 20000;
+                configInputs.overrunCooldownMs.value = 10000;
                     }
                     if (
                         configInputs.autoLowerMs &&
@@ -390,7 +382,7 @@
                         notifyUrlInput.value = DEFAULT_NOTIFY_URL;
                     }
                     lastStatusSnapshot.overrunDetected = null;
-                    lastStatusSnapshot.overrunArmed = null;
+                    lastStatusSnapshot.overrunReady = null;
                     lastStatusSnapshot.cooldown = null;
                     lastStatusSnapshot.target = null;
                     lastStatusSnapshot.state = null;
@@ -467,7 +459,7 @@
                 } else {
                     statusLabels.ping.textContent = '–';
                 }
-                statusLabels.overrunArmed.textContent = data.overrunArmed ? 'ja' : 'nein';
+                statusLabels.overrunReady.textContent = data.overrunReady ? 'ja' : 'nein';
                 statusLabels.overrunDetected.textContent = data.overrunDetected ? 'ja' : 'nein';
                 statusLabels.cooldown.textContent = data.cooldown ? 'aktiv' : 'aus';
 
@@ -478,18 +470,18 @@
                             : 'Kein Auto-Raise (Poller Delay aus)';
                         consoleLog('warn', `Überfahrt-Sensor aktiv (${reason})`, {
                             cooldown: data.cooldown,
-                            overrunArmed: data.overrunArmed
+                            overrunReady: data.overrunReady
                         });
                     } else if (lastStatusSnapshot.overrunDetected !== null) {
                         consoleLog('info', 'Überfahrt-Sensor frei', {
                             cooldown: data.cooldown,
-                            overrunArmed: data.overrunArmed
+                            overrunReady: data.overrunReady
                         });
                     }
                 }
 
-                if (lastStatusSnapshot.overrunArmed !== data.overrunArmed) {
-                    consoleLog('info', `Überfahrt ${data.overrunArmed ? 'armed' : 'disarmed'}`, {
+                if (lastStatusSnapshot.overrunReady !== data.overrunReady) {
+                    consoleLog('info', `Überfahrt ${data.overrunReady ? 'bereit' : 'gesperrt'}`, {
                         cooldown: data.cooldown,
                         autoLowerMs
                     });
@@ -521,7 +513,7 @@
                 }
 
                 lastStatusSnapshot.overrunDetected = data.overrunDetected;
-                lastStatusSnapshot.overrunArmed = data.overrunArmed;
+                lastStatusSnapshot.overrunReady = data.overrunReady;
                 lastStatusSnapshot.cooldown = data.cooldown;
                 lastStatusSnapshot.target = data.target;
                 lastStatusSnapshot.state = data.state;
@@ -530,7 +522,7 @@
                 lastStatusSnapshot.notifyUrl = data.notifyUrl;
             } catch (error) {
                 statusLabels.state.textContent = 'Fehler';
-                statusLabels.overrunArmed.textContent = '–';
+                statusLabels.overrunReady.textContent = '–';
                 statusLabels.overrunDetected.textContent = '–';
                 statusLabels.cooldown.textContent = '–';
                 statusLabels.statusInterval.textContent = '–';
@@ -564,10 +556,6 @@
                 sendCommand('startAnimation', { animation });
             } else if (action === 'stopAnimation') {
                 sendCommand('stopAnimation');
-            } else if (action === 'armOverrun') {
-                sendCommand('armOverrun');
-            } else if (action === 'disarmOverrun') {
-                sendCommand('disarmOverrun');
             } else if (action === 'saveConfig') {
                 const payload = {};
                 Object.entries(configInputs).forEach(([key, input]) => {

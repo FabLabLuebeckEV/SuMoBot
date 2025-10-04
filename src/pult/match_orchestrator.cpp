@@ -55,7 +55,6 @@ void MatchOrchestrator::startMatch() {
     }
   }
 
-  disarmPollerOverrun(false);
   sendAnimation(comms::AnimationId::kCountdown);
 
   if (matchType_ == MatchType::kDeath) {
@@ -112,7 +111,6 @@ void MatchOrchestrator::triggerCountdown() {
 }
 
 void MatchOrchestrator::raisePoller() {
-  disarmPollerOverrun(false);
   controller_.sendMoveToLimit(comms::LimitDirection::kUp);
   sendAnimation(comms::AnimationId::kPollerOverrun);
   sendObserver("poller");
@@ -127,7 +125,6 @@ void MatchOrchestrator::raisePoller() {
 
 void MatchOrchestrator::lowerPoller() {
   controller_.sendMoveToLimit(comms::LimitDirection::kDown);
-  armPollerOverrun(false);
   setActionMessage("poller down");
   if (phase_ == Phase::kRunning && matchType_ == MatchType::kNormal) {
     autoLowerScheduledMs_ = 0;
@@ -182,20 +179,6 @@ void MatchOrchestrator::movePollerToLimit(comms::LimitDirection direction) {
   setActionMessage(msg);
 }
 
-void MatchOrchestrator::armPollerOverrun(bool announce) {
-  controller_.sendSetOverrunArmed(true);
-  if (announce) {
-    setActionMessage("overrun arm");
-  }
-}
-
-void MatchOrchestrator::disarmPollerOverrun(bool announce) {
-  controller_.sendSetOverrunArmed(false);
-  if (announce) {
-    setActionMessage("overrun off");
-  }
-}
-
 uint32_t MatchOrchestrator::matchElapsedMs() const {
   if (matchStartMs_ == 0 || !matchRunning()) {
     return 0;
@@ -236,7 +219,7 @@ uint32_t MatchOrchestrator::countdownRemainingMs() const {
   return kCountdownDurationMs - elapsed;
 }
 
-bool MatchOrchestrator::pollerOverrunArmed() const {
+bool MatchOrchestrator::pollerOverrunReady() const {
   return (lastStatusFlags_ & static_cast<uint16_t>(comms::StatusFlag::kOverrunArmed)) != 0;
 }
 
@@ -327,15 +310,6 @@ void MatchOrchestrator::updateFromStatus() {
     }
   }
 
-  if (phase_ == Phase::kRunning && matchType_ == MatchType::kNormal && lowered) {
-    const bool overrunArmed = (flags & static_cast<uint16_t>(comms::StatusFlag::kOverrunArmed)) != 0;
-    const bool cooldown = (flags & static_cast<uint16_t>(comms::StatusFlag::kCooldownActive)) != 0;
-    const bool sensorActive = (flags & static_cast<uint16_t>(comms::StatusFlag::kPollerSensorActive)) != 0;
-    if (!overrunArmed && !cooldown && !sensorActive) {
-      armPollerOverrun(false);
-    }
-  }
-
   const bool overrunDetected = (flags & static_cast<uint16_t>(comms::StatusFlag::kOverrunDetected)) != 0;
   if (overrunDetected && !overrunHandled_) {
     handlePollerSensorEvent();
@@ -347,6 +321,7 @@ void MatchOrchestrator::updateFromStatus() {
 
 void MatchOrchestrator::updateTimers() {
   const uint32_t now = millis();
+  const bool matchActive = (phase_ == Phase::kRunning && matchType_ == MatchType::kNormal);
 
   if (phase_ == Phase::kCountdown && countdownStartMs_ != 0) {
     if (now - countdownStartMs_ >= kCountdownDurationMs) {
@@ -369,7 +344,6 @@ void MatchOrchestrator::updateTimers() {
       }
       if (!lowered) {
         controller_.sendMoveToLimit(comms::LimitDirection::kDown);
-        armPollerOverrun(false);
         sendObserver("auto lower");
         setActionMessage("auto lower");
         notify(StatusNotifier::Action::kPollerDown);
@@ -378,11 +352,33 @@ void MatchOrchestrator::updateTimers() {
     }
   }
 
-  if (overrunRaisePending_ && now >= overrunRaiseScheduledMs_) {
-    overrunRaisePending_ = false;
-    overrunRaiseScheduledMs_ = 0;
-    controller_.sendMoveToLimit(comms::LimitDirection::kUp);
-    notify(StatusNotifier::Action::kPollerUp);
+  if (overrunRaisePending_) {
+    if (now >= overrunRaiseScheduledMs_) {
+      const bool shouldSend = !overrunRaiseCommandIssued_ ||
+                              (now - lastOverrunRaiseCommandMs_) >= 500;
+      if (shouldSend) {
+        controller_.sendMoveToLimit(comms::LimitDirection::kUp);
+        if (!overrunRaiseCommandIssued_) {
+          notify(StatusNotifier::Action::kPollerUp);
+        }
+        overrunRaiseCommandIssued_ = true;
+        lastOverrunRaiseCommandMs_ = now;
+      }
+    }
+
+    bool raised = false;
+    if (controller_.hasStatus()) {
+      raised = !pollerIsLowered(controller_.status());
+    }
+    if (raised) {
+      overrunRaisePending_ = false;
+      overrunRaiseScheduledMs_ = 0;
+      overrunRaiseCommandIssued_ = false;
+      lastOverrunRaiseCommandMs_ = 0;
+      if (!matchActive) {
+        matchType_ = MatchType::kUnknown;
+      }
+    }
   }
 }
 
@@ -403,9 +399,6 @@ void MatchOrchestrator::finishCountdown() {
     sendObserver(death ? "death start" : "start");
     setActionMessage(death ? "death start" : "start");
     scheduleAutoLower(now);
-    if (!death) {
-      armPollerOverrun(false);
-    }
     notify(StatusNotifier::Action::kMatchStart);
   } else {
     phase_ = resume;
@@ -420,23 +413,33 @@ void MatchOrchestrator::finishCountdown() {
 }
 
 void MatchOrchestrator::handlePollerSensorEvent() {
-  if (phase_ != Phase::kRunning || matchType_ != MatchType::kNormal) {
-    return;
+  const bool matchActive = (phase_ == Phase::kRunning);
+  if (matchActive) {
+    if (matchType_ == MatchType::kDeath) {
+      return;
+    }
+    if (matchType_ == MatchType::kUnknown) {
+      matchType_ = MatchType::kNormal;
+    }
   }
-  disarmPollerOverrun(false);
+
   sendAnimation(comms::AnimationId::kPollerOverrun);
   sendObserver("poller");
   setActionMessage("poller");
   const uint32_t now = millis();
   notify(StatusNotifier::Action::kPollerOverrun);
-  if (autoLowerDelayMs_ > 0) {
-    overrunRaiseScheduledMs_ = now + autoLowerDelayMs_;
-    overrunRaisePending_ = true;
+  overrunRaiseScheduledMs_ = now + (autoLowerDelayMs_ > 0 ? autoLowerDelayMs_ : 0);
+  overrunRaisePending_ = true;
+  overrunRaiseCommandIssued_ = false;
+  lastOverrunRaiseCommandMs_ = 0;
+
+  if (matchActive && matchType_ == MatchType::kNormal) {
+    autoLowerScheduledMs_ = 0;
+    autoLowerTriggered_ = true;
   } else {
-    controller_.sendMoveToLimit(comms::LimitDirection::kUp);
+    autoLowerScheduledMs_ = 0;
+    autoLowerTriggered_ = false;
   }
-  autoLowerScheduledMs_ = 0;
-  autoLowerTriggered_ = true;
 }
 
 void MatchOrchestrator::resetAutoLower() {
@@ -444,6 +447,8 @@ void MatchOrchestrator::resetAutoLower() {
   autoLowerTriggered_ = false;
   overrunRaisePending_ = false;
   overrunRaiseScheduledMs_ = 0;
+  overrunRaiseCommandIssued_ = false;
+  lastOverrunRaiseCommandMs_ = 0;
 }
 
 void MatchOrchestrator::scheduleAutoLower(uint32_t now) {

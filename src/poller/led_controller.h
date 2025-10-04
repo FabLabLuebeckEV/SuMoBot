@@ -25,7 +25,7 @@ class LedController {
     bool pollerIsLowered = true;
     bool pollerMoving = false;
     bool manualControl = false;
-    bool overrunArmed = false;
+    bool overrunReady = false;
     bool cooldownActive = false;
     bool sensorActive = false;
     bool calibrating = false;
@@ -49,7 +49,7 @@ class LedController {
   void renderStop(uint32_t nowMs);
   void renderPoller(uint32_t nowMs, const CRGB& arenaColor);
   void renderPollerOverrunRaw(uint32_t nowMs);
-  void renderPollerArmed(uint32_t nowMs);
+  void renderPollerReady(uint32_t nowMs);
   void renderRundum(const CRGB& arenaColor);
   void renderArenaRainbow(uint32_t nowMs);
   void renderArenaSolid(const CRGB& color);

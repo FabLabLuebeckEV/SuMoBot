@@ -106,13 +106,6 @@ bool PultController::sendCalibrate() {
   return sendCommand(command);
 }
 
-bool PultController::sendSetOverrunArmed(bool armed) {
-  comms::PollerCommand command{};
-  command.type = comms::CommandType::kSetOverrunArmed;
-  command.value = armed ? 1 : 0;
-  return sendCommand(command);
-}
-
 bool PultController::sendSetParameter(comms::PollerParameterId id, int32_t rawValue) {
   comms::PollerCommand command{};
   command.type = comms::CommandType::kSetParameter;
@@ -198,7 +191,7 @@ bool PultController::sendCommand(const comms::PollerCommand& commandTemplate, ui
 
 void PultController::handleStatus(const comms::PollerStatus& status, const uint8_t mac[6], int8_t /*rssi*/) {
   Serial.printf(
-      "[Pult] Status recv state=%d anim=%d pos=%ld target=%ld flags=0x%04x overrunArmed=%s overrunDetected=%s cooldown=%s sensor=%s\n",
+      "[Pult] Status recv state=%d anim=%d pos=%ld target=%ld flags=0x%04x overrunReady=%s overrunDetected=%s cooldown=%s sensor=%s\n",
       static_cast<int>(status.state), static_cast<int>(status.activeAnimation), static_cast<long>(status.currentPosition),
       static_cast<long>(status.targetPosition), status.statusFlags,
       (status.statusFlags & static_cast<uint16_t>(comms::StatusFlag::kOverrunArmed)) ? "yes" : "no",

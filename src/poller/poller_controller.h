@@ -22,8 +22,6 @@ class PollerController {
   bool isPollerLowered();
   bool isPollerRaised();
   bool cooldownActive(uint32_t now) const;
-  bool canInitiateOverrun(uint32_t now);
-  bool setOverrunArmed(bool armed, uint32_t now);
   bool handleParameterUpdate(comms::PollerParameterId id, int32_t rawValue);
   void onConfigChanged();
 
@@ -34,7 +32,6 @@ class PollerController {
   uint32_t lastStatusSentMs_ = 0;
   uint32_t lastPollerSensorChangeMs_ = 0;
   bool pollerSensorLatched_ = false;
-  bool overrunArmed_ = true;
   bool overrunLatched_ = false;
   uint32_t lastOverrunMs_ = 0;
   bool cooldownWasActive_ = false;

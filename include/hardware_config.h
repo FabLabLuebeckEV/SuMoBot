@@ -29,7 +29,7 @@ struct PollerParameters {
   float   stepperMaxSpeed = 45000.0f;
   float   stepperAcceleration = 2000.0f;
   uint32_t statusIntervalMs = 250;
-  uint32_t overrunCooldownMs = 20000;
+  uint32_t overrunCooldownMs = 10000;
 };
 
 constexpr PollerParameters DEFAULT_POLLER_PARAMETERS{};

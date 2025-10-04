@@ -39,8 +39,6 @@ class MatchOrchestrator {
   void movePollerAbsolute(int32_t position);
   void movePollerRelative(int32_t delta);
   void movePollerToLimit(comms::LimitDirection direction);
-  void armPollerOverrun(bool announce = true);
-  void disarmPollerOverrun(bool announce = true);
 
   Phase phase() const { return phase_; }
   bool matchRunning() const { return phase_ == Phase::kRunning; }
@@ -52,7 +50,7 @@ class MatchOrchestrator {
   uint32_t countdownRemainingMs() const;
   const char* lastAction() const { return lastAction_; }
   bool pollerKnown() const { return controller_.pollerKnown(); }
-  bool pollerOverrunArmed() const;
+  bool pollerOverrunReady() const;
   bool pollerCooldownActive() const;
   bool pollerOverrunDetected() const;
   void setAutoLowerDelayMs(uint32_t delay);
@@ -96,6 +94,8 @@ class MatchOrchestrator {
   bool autoLowerTriggered_ = false;
   uint32_t overrunRaiseScheduledMs_ = 0;
   bool overrunRaisePending_ = false;
+  bool overrunRaiseCommandIssued_ = false;
+  uint32_t lastOverrunRaiseCommandMs_ = 0;
 
   ButtonState startStopButton_{};
   ButtonState pollerButton_{};
