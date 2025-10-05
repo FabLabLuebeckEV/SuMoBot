@@ -1,49 +1,87 @@
-# Arena Sumo Bot Steuerung
+# Arena Sumo Bot – Detaildokumentation
 
-## Überblick
-Dieses Repository bündelt die Firmware für Arena-Poller und Bedienpult des SuMoBot-Projekts in einem gemeinsamen PlatformIO-Projekt. Beide Firmware-Ziele teilen sich Hardware- und Kommunikations-Module, kommunizieren per ESP-NOW und nutzen einen ESP32 als Plattform.
+## Komponenten
 
-- **Poller (env:poller)** – verwaltet Stepper, Endschalter, Poller-Sensor und LED-Animationen direkt in der Arena. Im Fokus stehen deterministische Bewegungen, saubere Statusmeldungen und ein schlanker ESP-NOW-Befehlsempfänger.
-- **Pult (env:pult)** – übernimmt die Match-Orchestrierung. Es liest Bedientaster, steuert ein I²C-LCD, verwaltet den ESP-NOW-Link, stellt eine Weboberfläche (LittleFS) bereit und gibt Observer-Meldungen weiter.
-
-## Verzeichnisstruktur
-```
-├── data/                 # Weboberfläche für das Pult (LittleFS)
-├── include/
-│   ├── hardware_config.h # Pin-/Timing-Definitionen Poller
-│   ├── network_config.h  # WLAN-Zugangsdaten Pult
-│   ├── comms/            # ESP-NOW Nachrichten & Peers
-│   └── pult/             # Pult-spezifische Header (LCD, Buttons)
-├── src/
-│   ├── common/           # ESP-NOW Infrastruktur
-│   ├── poller/           # Poller-Controller, Stepper & LEDs
-│   └── pult/             # Pult-Controller, Match-Orchestrator, Webserver
-└── platformio.ini        # Zwei Build-Targets (poller/pult)
-```
-
-## Bauen & Flashen
-1. Stelle sicher, dass `pio` (PlatformIO) auf dem Pfad liegt (`~/.local/bin/pio`).
-2. Poller-Firmware bauen/flashen:
-   ```bash
-   pio run -e poller
-   pio run -e poller -t upload
-   ```
-3. Pult-Firmware bauen/flashen:
-   ```bash
-   pio run -e pult
-   pio run -e pult -t upload
-   ```
+- **Poller (env:poller)**
+  - Stepper-gesteuerter Hubmechanismus mit Endschalter (GPIO 14, LOW aktiv)
+  - Poller-Sensor (GPIO 36)
+  - LED-Streifen: Rundum (GPIO 25), Poller-Ringe (GPIO 4), Arena (GPIO 26)
+  - UDP-Status/Command-Link, FastLED (ESP32 I2S) für LED-Streaming
+- **Pult (env:pult)**
+  - Match-Orchestrierung, Auto-Lower, Web-UI (LittleFS)
+  - LCD via I²C (GPIO 21/22), Taster (GPIO 4/39/34)
+  - UDP-Kommandos an den Poller, Webhooks für externe Systeme
 
 ## Kommunikation
-- **ESP-NOW**: Nachrichtenstruktur steht in `include/comms/messages.h`. Das Pult sendet `PollerCommand`, der Poller antwortet mit `PollerStatus` (inkl. RSSI, Flags, Positionen).
-- **Webserver (Pult)**: `/api/command` nimmt Steuerbefehle (POST/GET), `/api/status` liefert aktuelle Poller-/Match-Daten. Statische Dateien kommen aus `data/` (LittleFS).
-- **Observer-Link**: Optionaler MAC (`OBSERVER_MAC`) für Info-Panels.
 
-## Hardware-Hinweise
-- **Poller**: Poller-Endschalter auf `GPIO 14` (LOW aktiv), Stepper-Pins `GPIO 16/17`, Enable `GPIO 13`, Sensor `GPIO 36`. LED-Streifen an `GPIO 25/4/26`.
-- **Pult**: Taster (`GPIO 4`, `39`, `34`), I²C-LCD (`SDA 21`, `SCL 22`), optional Ethernet (W5500) vorbereitet.
+| Kanal          | Protokoll | Port  | Beschreibung                                             |
+|----------------|-----------|-------|----------------------------------------------------------|
+| Poller ↔ Pult  | UDP       | 42142 | Broadcast-Autodiscovery, `PollerCommand` / `PollerStatus`|
+| Web-UI         | HTTP      | 80    | Pult stellt API/Frontend über LittleFS bereit            |
+| Webhooks       | HTTP POST | frei  | Optional, konfigurierbar im Web-UI (`/queues/queue?...`) |
 
-## Weitere Infos
-- `include/hardware_config.h` & `include/pult/hardware_config.h` sind zentrale Anlaufstellen für Pinmaps und Timing.
-- WLAN-Zugangsdaten für das Pult liegen in `include/network_config.h` (Standard: `fablab` / `fablabfdm`).
-- Beide Targets laufen auf Arduino-ESP32 (IDF5); die Poller-LEDs nutzen FastLED 3.10, das Pult setzt auf ESPAsyncWebServer 3.6.
+`include/comms/messages.h` enthält die Paketstrukturen. `include/comms/peer_config.h` definiert Standardziele (Broadcast). Bei festen IPs: Bytes 0–3 = IPv4, Bytes 4–5 = UDP-Port (Big Endian).
+
+## Poller-Ablauf
+
+1. **Startup**: FastLED-Init, alle Streifen ca. 2 s blau.
+2. **Homing**: Stepper fährt nach oben, Endschalter setzt `positionHome`. Erst danach werden Abwärtskommandos akzeptiert.
+3. **Status-Publish**: `PollerStatus` enthält Positionen, Flags, Parameter-Kopie, Ping-IDs.
+4. **LED-Task**: FreeRTOS-Task (`core 0`, ~8 ms Loop) rendert Animationen und ruft `FastLED.show()` mit ≥16 ms Abstand.
+
+Sicherheitsmechanismen:
+- `hardware::sanitized()` klemmt `position*`-Werte; `StepperController::clampTarget()` verhindert das Verlassen des erlaubten Bewegungsfensters.
+- Sensortrigger (`kOverrunDetected`) löst Poller-Wellenanimation und Auto-Raise aus.
+- Cooldown (`overrunCooldownMs`) blockiert erneutes Arming, bis der Poller wieder oben und freigegeben ist.
+
+## LED-Zustände (Kurzfassung)
+
+| Phase                | Arena                      | Rundum                         | Poller-Ringe                              |
+|----------------------|----------------------------|--------------------------------|-------------------------------------------|
+| Init                 | Blau                       | Blau                            | Blau                                     |
+| Idle                 | Regenbogenlauf             | Schwach blau (solange nicht unten)| Blau wenn Poller oben, sonst aus      |
+| Countdown            | Orange/Rot-Blink (300/500 ms) | Orange/Rot synchron            | folgt Arena                              |
+| Match                | Grün                       | Grün (solange Poller oben)      | Grün (oben) / Aus (unten)               |
+| Stop/Timeout         | Rot-Blink                  | Rot-Blink                       | Rot-Blink                                |
+| Überfahrt „armed“    | Statusabhängig             | Wie Idle                        | Lauflicht außen→innen                    |
+| Überfahrt „triggered"| Statusabhängig             | Wie Idle                        | Wellenanimation, danach wieder Blau      |
+| Manuelle Fahrten     | Spiegeln Matchfarbe        | Animation pausiert              | Matchfarbe oder aus                     |
+
+## Pult-Funktionen
+
+- Drei Taster (Start/Stop, Poller, Countdown) mit Debounce & Cooldowns.
+- LCD-Anzeige für Status (Matchphase, Ping, Pollerinformationen).
+- Web-UI (LittleFS `data/`): Status-Seite, Parameter-Formulare, Webhook-/Delay-Konfiguration.
+- Auto-Lower (konfigurierbarer Delay) & Webhook-Ereignisse (`MatchStart`, `PollerOverrun`, ...).
+
+## Konfiguration & Dateien
+
+- **Poller-Parameter** (`hardware::PollerParameters`): EEPROM, via Web-UI veränderbar. Änderungen erfordern erneutes Homing.
+- **Netzwerk** (`include/network_config.h`): Wi-Fi-SSID/-Passwort des Pults.
+- **UDP-Ziele** (`include/comms/peer_config.h`): Standard Broadcast 255.255.255.255:42142; bei Bedarf IP + Port setzen.
+- **LED-Setup** (`src/poller/led_controller.cpp`): FastLED I2S, DMA-Puffer, Dithering-Off, Stromlimit 6 A bei 5 V.
+
+## Build/Flash Kurzanleitung
+
+```bash
+# Poller
+pio run -e poller
+pio run -e poller -t upload
+
+# Pult
+pio run -e pult
+pio run -e pult -t upload
+pio run -t uploadfs -e pult   # Webinhalte
+```
+
+Serielle Konsole: 115200 Baud. Firmware liegt nach dem Build unter `.pio/build/<env>/firmware.bin`.
+
+## Fehlersuche
+
+- **Keine UDP-Verbindung**: WLAN-Abdeckung prüfen, ggf. feste IPs konfigurieren oder Firewall anpassen.
+- **LED-Flackern bei Wi-Fi**: Sicherstellen, dass Poller mit aktuellem FastLED-I2S-Build läuft; DMA-Puffer ggf. erhöhen (`FASTLED_ESP32_I2S_NUM_DMA_BUFFERS`).
+- **Poller fährt zu weit**: Parameter prüfen; Logs zeigen geklemmte Targets (`[Stepper] Target request … clamped …`).
+- **Webhooks**: Basis-URL im Web-UI setzen; Aktionen erscheinen als Query-Parameter (`SuMo:<Action>`).
+
+Weitere Ablauf- und Troubleshooting-Notizen sind in `agents.md` hinterlegt.
+

@@ -4,13 +4,30 @@
 
 namespace comms {
 
-// Update these MAC addresses to match the deployed hardware.
-constexpr uint8_t PULT_MAC[6] = {0xac, 0x15, 0x18, 0xe9, 0x7e, 0x78};
+// UDP transport port used for poller/pult communication.
+constexpr uint16_t UDP_PORT = 42142;
 
-// Optional pre-configured poller MAC. Leave as zeros to auto-discover.
-constexpr uint8_t POLLER_MAC[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+// Helper address encoding (IPv4 + port). Defaults to broadcast discovery.
+constexpr uint8_t BROADCAST_ADDRESS[6] = {
+    0xff, 0xff, 0xff, 0xff,
+    static_cast<uint8_t>((UDP_PORT >> 8) & 0xff),
+    static_cast<uint8_t>(UDP_PORT & 0xff)};
 
-// Optional observer/scoreboard MAC
-constexpr uint8_t OBSERVER_MAC[6] = {0x08, 0x3a, 0xf2, 0x37, 0x3c, 0xfc};
+// Default peer targets. Leave as broadcast for auto-discovery, or override with
+// a fixed IPv4 (bytes 0-3) and UDP port (bytes 4-5, big endian).
+constexpr uint8_t PULT_MAC[6] = {
+    0xff, 0xff, 0xff, 0xff,
+    static_cast<uint8_t>((UDP_PORT >> 8) & 0xff),
+    static_cast<uint8_t>(UDP_PORT & 0xff)};
+
+constexpr uint8_t POLLER_MAC[6] = {
+    0xff, 0xff, 0xff, 0xff,
+    static_cast<uint8_t>((UDP_PORT >> 8) & 0xff),
+    static_cast<uint8_t>(UDP_PORT & 0xff)};
+
+constexpr uint8_t OBSERVER_MAC[6] = {
+    0xff, 0xff, 0xff, 0xff,
+    static_cast<uint8_t>((UDP_PORT >> 8) & 0xff),
+    static_cast<uint8_t>(UDP_PORT & 0xff)};
 
 }  // namespace comms

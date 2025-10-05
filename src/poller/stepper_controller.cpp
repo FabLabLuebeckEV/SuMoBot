@@ -66,18 +66,31 @@ void StepperController::update() {
 
 void StepperController::setTarget(int32_t position) {
   const int32_t current = stepper_.currentPosition();
-  stepper_.moveTo(position);
+  const int32_t clamped = clampTarget(position);
+  if (clamped != position) {
+    POLLER_LOG_PRINTF("[Stepper] Target request %ld clamped to %ld\n", static_cast<long>(position),
+                  static_cast<long>(clamped));
+  }
+  stepper_.moveTo(clamped);
   mode_ = Mode::kMoving;
-  POLLER_LOG_PRINTF("[Stepper] Move absolute -> %ld (current %ld)\n", static_cast<long>(position),
+  POLLER_LOG_PRINTF("[Stepper] Move absolute -> %ld (current %ld)\n", static_cast<long>(clamped),
                 static_cast<long>(current));
   reportModeChange(mode_, "absolute target");
 }
 
 void StepperController::moveBy(int32_t delta) {
-  stepper_.move(delta);
+  const int32_t current = stepper_.currentPosition();
+  const int32_t desired = current + delta;
+  const int32_t clamped = clampTarget(desired);
+  if (clamped != desired) {
+    POLLER_LOG_PRINTF("[Stepper] Relative move request %ld clamped to %ld\n", static_cast<long>(desired),
+                  static_cast<long>(clamped));
+  }
+  stepper_.moveTo(clamped);
   mode_ = Mode::kMoving;
+  const int32_t target = stepper_.targetPosition();
   POLLER_LOG_PRINTF("[Stepper] Move relative delta=%ld (target %ld)\n", static_cast<long>(delta),
-                static_cast<long>(stepper_.targetPosition()));
+                static_cast<long>(target));
   reportModeChange(mode_, "relative move");
 }
 
@@ -153,13 +166,15 @@ void StepperController::handleEndstopTriggered() {
 
   if (mode_ == Mode::kCalibrating) {
     calibrationBackoffActive_ = true;
-    stepper_.move(-200);
-    POLLER_LOG_PRINTLN("[Stepper] Calibration backoff engaged (-200)");
+    const int32_t target = clampTarget(stepper_.currentPosition() - 200);
+    stepper_.moveTo(target);
+    POLLER_LOG_PRINTF("[Stepper] Calibration backoff engaged (target %ld)\n", static_cast<long>(target));
   } else {
     mode_ = Mode::kMoving;
-    stepper_.move(-100);
+    const int32_t target = clampTarget(stepper_.currentPosition() - 100);
+    stepper_.moveTo(target);
     calibrated_ = true;
-    POLLER_LOG_PRINTLN("[Stepper] Endstop hit during move, backing off 100 steps");
+    POLLER_LOG_PRINTF("[Stepper] Endstop hit during move, backoff target %ld\n", static_cast<long>(target));
     reportModeChange(mode_, "endstop backoff");
   }
 }
@@ -205,6 +220,30 @@ void StepperController::updateMotionProfile() {
 
 const hardware::PollerParameters& StepperController::config() const {
   return configCache_;
+}
+
+int32_t StepperController::clampTarget(int32_t position) const {
+  const int32_t lower = configCache_.positionDownTarget;
+  const int32_t upper = configCache_.positionUpTarget;
+  if (lower <= upper) {
+    if (position < lower) {
+      return lower;
+    }
+    if (position > upper) {
+      return upper;
+    }
+    return position;
+  }
+  // Fallback in case of unexpected configuration ordering.
+  const int32_t minTarget = upper;
+  const int32_t maxTarget = lower;
+  if (position < minTarget) {
+    return minTarget;
+  }
+  if (position > maxTarget) {
+    return maxTarget;
+  }
+  return position;
 }
 
 const char* StepperController::modeName(Mode mode) {

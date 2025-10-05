@@ -41,6 +41,7 @@ class StepperController {
   const hardware::PollerParameters& config() const;
   static const char* modeName(Mode mode);
   void reportModeChange(Mode newMode, const char* reason = nullptr);
+  int32_t clampTarget(int32_t position) const;
 
   AccelStepper stepper_{AccelStepper::DRIVER, hardware::PIN_STEPPER_STEP, hardware::PIN_STEPPER_DIR};
   Mode mode_ = Mode::kIdle;

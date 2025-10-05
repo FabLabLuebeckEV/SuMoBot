@@ -1,71 +1,82 @@
-# SuMoBot – Firmware Übersicht
+# SuMoBot Firmware
 
-Dieses Repository bündelt die Firmware-Komponenten des SuMoBot-Arena-Projekts in einem gemeinsamen PlatformIO-Setup. Es existieren zwei buildbare Targets, die sich Module und Konfigurationen teilen:
+Firmware für Arena-Poller und Bedienpult des SuMoBot-Projekts. Beide Geräte basieren auf ESP32, teilen sich eine gemeinsame Codebasis und werden mit PlatformIO gebaut.
 
-- `env:poller` – Steuerung des Arena-Pollers (Stepper, Sensoren, LEDs, ESP-NOW-Empfang)
-- `env:pult` – Bedienpult inklusive Match-Orchestrierung, LCD, ESP-NOW und Weboberfläche
+- **env:poller** – steuert Stepper, Sensorik und LED-Choreografie in der Arena.
+- **env:pult** – orchestriert Matches, stellt das Web-UI bereit, spricht das LCD an und verwaltet die Kommunikation.
 
-## Projektaufbau
+Die Geräte entdecken sich gegenseitig über UDP-Broadcast (Port `42142`). Status- und Kommandopakete sind in `include/comms/messages.h` definiert. Standardmäßig wird keine feste IP benötigt – optional können in `include/comms/peer_config.h` statische Ziele hinterlegt werden (IPv4 + Port).
+
+## Voraussetzungen
+
+- Python ≥ 3.8
+- PlatformIO Core (`pio`) über `pipx`
+
+Empfohlenes Setup unter Ubuntu/WSL:
+
+```bash
+sudo apt update
+sudo apt install python3 python3-venv python3-pip pipx
+pipx ensurepath    # einmalig, danach neues Terminal
+pipx install platformio
 ```
-├── agents.md             # Aufgaben-/Teamnotizen
-├── data/                 # LittleFS-Dateien für das Pult (Web-Oberfläche)
-├── include/              # Gemeinsame Header: Hardware-, Netzwerk- und Comms-Definitionen
-├── lib/                  # Platz für begleitende Bibliotheken (leer, README)
-├── platformio.ini        # Build-Konfiguration für Poller und Pult
+
+`pio --version` sollte anschließend funktionieren.
+
+## Repository-Struktur
+
+```
+├── agents.md          # aktuelle Projekt-/Laufzeitnotizen
+├── data/              # LittleFS-Inhalte für das Pult-Web-UI
+├── include/           # geteilte Header (Hardware, Netzwerk, Protokolle)
+├── lib/               # Platz für zusätzliche Bibliotheken (leer)
+├── platformio.ini     # Build-Konfiguration für poller/pult
 ├── src/
-│   ├── common/           # ESP-NOW Basis & geteilte Module
-│   ├── poller/           # Poller-spezifische Firmware
-│   └── pult/             # Pult-spezifische Firmware
-├── test/                 # PlatformIO-Tests (noch leer)
-├── .vscode/              # Editor-Empfehlungen
-└── legacy/
-    └── pult/             # Altes Einzelprojekt (historische Referenz)
+│   ├── common/        # UDP-Link, Utility-Code, gemeinsame Module
+│   ├── poller/        # Poller-Firmware (Stepper, LEDs, Status)
+│   └── pult/          # Pult-Firmware (Match-Orchestrator, Webserver, LCD)
+├── test/              # Tests (derzeit leer)
+└── README.arena.md    # Hardware-/Ablaufdetails zur Arena
 ```
-
-Weitere technische Details zu den Modulen und Hardware-Pins findest du in `README.arena.md`.
-
-## Laufzeitverhalten (Kurzüberblick)
-- **Kalibrierung:** Nach dem Boot fährt der Poller automatisch gegen den oberen Anschlag und akzeptiert erst danach Abwärts-Kommandos.
-- **Ping-Pong-Monitoring:** Das Pult sendet alle 5 s einen ESP-NOW-`kPing`; der Poller bestätigt implizit im Status. `/api/status` liefert unter `ping` Alter & Health.
-- **Konfigurierbare Parameter:** Bewegungs-/Timing-Werte (`PollerParameters`) liegen im EEPROM und lassen sich im Web-UI des Pults anpassen (Endpoint `/api/command?type=updateConfig`).
-- **LED-Orchestrierung:**
-  - Eigenes FreeRTOS-Task (Core 0, ~125 Hz) steuert Arena-/Poller-Licht, `FastLED.show()` wird throttled (≥16 ms Abstand), damit Stepper-Takte nicht geblockt werden.
-  - **Init:** Komplettes System blau (~2 s).
-  - **Idle:** Arena zeigt Regenbogenlauf; Rundum dezent blau, solange Poller nicht unten; Poller-Ringe blau wenn oben, ansonsten aus.
-  - **Countdown:** Orange → Rot Blinksequenz über alle Segmente.
-  - **Match:** Arena konstant grün; Rundum grün solange Poller oben; Poller-Ringe übernehmen Match-Farbe.
-  - **Stop:** Komplettes System blinkt rot.
-  - **Überfahrt armed:** Poller-Ringe laufen außen→innen (vier Ringe: 8/12/16/24 LEDs); Sensor-Trigger hält Animation bis Poller wieder oben (danach blau).
-  - **Überfahrt ausgelöst:** Standardmäßig wartet das Pult 3000 ms, hebt den Poller, lässt ihn nach gleicher Verzögerung wieder absenken und blockiert erneutes Arming für 20000 ms Cooldown.
-- **Manuelle Fahrten:** Spezialeffekte pausieren, Poller leuchtet in Match-Farbe bzw. bleibt aus.
-
-## Status-Webhooks
-- Im Pult-Web-UI kann optional eine Basis-URL hinterlegt werden. Ab Werk ist `http://10.124.42.5:5000/` eingetragen; bei jeder Statusänderung sendet das Pult einen HTTP `POST` nach `BASE_URL/queues/queue?name=SuMo:<Aktion>`.
-- Sobald eine URL gesetzt ist, werden die folgenden Aktionsnamen verwendet:
-  - `MatchStart`
-  - `MatchStop`
-  - `CountdownStart`
-  - `PollerUp`
-  - `PollerDown`
-  - `PollerOverrun`
-- Der POST-Body ist ein leeres JSON-Objekt (`{}`); die Aktion kann über den Query-Parameter ausgelesen werden.
 
 ## Bauen & Flashen
-1. Stelle sicher, dass `pio` (PlatformIO) über den Pfad erreichbar ist (`~/.local/bin/pio`).
-2. Poller-Firmware bauen/flashen:
-   ```bash
-   pio run -e poller
-   pio run -e poller -t upload
-   ```
-3. Pult-Firmware bauen/flashen:
-   ```bash
-   pio run -e pult
-   pio run -e pult -t upload
-   ```
 
-Serielle Debug-Ausgaben laufen standardmäßig auf 115200 Baud. Der ESP32-NVS bzw. LittleFS-Inhalt kann mit `pio run -t uploadfs` pro Environment geschrieben werden.
+Poller:
+```bash
+pio run -e poller
+pio run -e poller -t upload        # optional: flashen
+```
 
-## Legacy-Code
-Der frühere Stand des separaten Pult-Projekts liegt nun unter `legacy/pult/`. Die aktiven Targets verwenden ausschließlich die Module aus `src/` und `include/`.
+Pult:
+```bash
+pio run -e pult
+pio run -e pult -t upload
+pio run -t uploadfs -e pult        # LittleFS/Webinhalte aktualisieren
+```
 
-Bei Bedarf lassen sich die Legacy-Quellen weiterhin mit PlatformIO inspizieren; sie werden jedoch nicht mehr gepflegt.
+Serielle Ausgaben laufen standardmäßig mit 115200 Baud. Für alternative Upload-Tools kann die erzeugte Firmware unter `.pio/build/<env>/firmware.bin` verwendet werden.
+
+## Wichtige Laufzeitdetails
+
+- **Kalibrierung:** Der Poller führt nach jedem Start ein Homing nach oben aus. Abwärtsbewegungen werden gesperrt, solange keine gültige Referenz vorliegt.
+- **Bewegungsgrenzen:** `hardware::sanitized()` klemmt alle Poller-Parameter; zusätzliche Clamp-Logik verhindert, dass der Stepper über `positionDownTarget` hinaus fährt.
+- **Kommunikation:** UDP-Statuspakete enthalten aktuelle Parameter, Ping-Informationen und Flags (`kOverrunArmed`, `kCooldownActive`, `kPollerSensorActive`, …). Das Pult sendet alle 5 s Pings und wertet `PollerStatus.lastCommandId` aus.
+- **LEDs:** Der Poller rendert LEDs in einem FreeRTOS-Task (Core 0) mit FastLEDs ESP32-I2S-Treiber (`FASTLED_ESP32_I2S`, 4 DMA-Buffers). `FastLED.show()` wird auf ≥16 ms getaktet, um Stepper-Updates nicht zu blockieren.
+- **Webhooks:** Das Pult kann Statusereignisse an eine frei wählbare Basis-URL posten (`/queues/queue?name=SuMo:<Action>`). Konfiguration über das Web-UI.
+
+## Konfiguration
+
+- Netzwerkeinstellungen: `include/network_config.h` (SSID/Passwort für das Pult-WLAN).
+- UDP-Targets: `include/comms/peer_config.h` (IPv4 + Port, Standard ist Broadcast 255.255.255.255:42142).
+- Poller-Parameter: `hardware::PollerParameters` (EEPROM, editierbar über das Web-UI unter „Poller Parameter“).
+- LED-/Match-Logik: `src/poller/led_controller.cpp` bzw. `src/pult/match_orchestrator.cpp`.
+
+## Troubleshooting
+
+- **Keine Kommunikation:** Prüfen, ob beide Geräte im selben WLAN sind und Port 42142 nicht gefiltert wird. Bei Bedarf feste IPs in `peer_config.h` eintragen.
+- **LED-Flackern:** Sicherstellen, dass beide Targets mit aktuellem I2S-Build geflasht wurden. Bei hoher Last kann `FASTLED_ESP32_I2S_NUM_DMA_BUFFERS` in `platformio.ini` erhöht werden.
+- **Parameteränderungen:** Nach Updates der Poller-Parameter Homing erneut auslösen, damit die neue Home-Position übernommen wird.
+- **Web-UI veraltet:** `pio run -t uploadfs -e pult` ausführen und das Pult neu starten.
+
+Weitere Detailinfos (z. B. LED-Zustände oder Matchphasen) findest du in `agents.md`.
+

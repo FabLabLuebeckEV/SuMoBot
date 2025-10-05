@@ -34,6 +34,11 @@ struct PollerParameters {
 
 constexpr PollerParameters DEFAULT_POLLER_PARAMETERS{};
 
+constexpr int32_t POLLER_POSITION_MIN = DEFAULT_POLLER_PARAMETERS.positionDownTarget - 500;
+constexpr int32_t POLLER_POSITION_MAX = DEFAULT_POLLER_PARAMETERS.positionUpTarget + 500;
+constexpr int32_t POLLER_MIN_POSITION_GUARD = 400;
+constexpr int32_t POLLER_MIN_ARM_MARGIN = 100;
+
 inline bool isValid(const PollerParameters& params) {
   return params.stepperMaxSpeed > 0.0f && params.stepperAcceleration > 0.0f &&
          params.statusIntervalMs > 0 && params.overrunCooldownMs > 0;
@@ -41,6 +46,17 @@ inline bool isValid(const PollerParameters& params) {
 
 inline PollerParameters sanitized(const PollerParameters& params) {
   PollerParameters result = params;
+
+  auto clamp = [](int32_t value, int32_t low, int32_t high) {
+    if (value < low) {
+      return low;
+    }
+    if (value > high) {
+      return high;
+    }
+    return value;
+  };
+
   if (result.stepperMaxSpeed <= 0.0f) {
     result.stepperMaxSpeed = DEFAULT_POLLER_PARAMETERS.stepperMaxSpeed;
   }
@@ -53,6 +69,36 @@ inline PollerParameters sanitized(const PollerParameters& params) {
   if (result.overrunCooldownMs == 0) {
     result.overrunCooldownMs = DEFAULT_POLLER_PARAMETERS.overrunCooldownMs;
   }
+  if (result.downArmMargin < 0) {
+    result.downArmMargin = DEFAULT_POLLER_PARAMETERS.downArmMargin;
+  }
+
+  result.positionHome = clamp(result.positionHome, POLLER_POSITION_MIN + POLLER_MIN_POSITION_GUARD,
+                              POLLER_POSITION_MAX - POLLER_MIN_POSITION_GUARD);
+  result.positionUpTarget = clamp(result.positionUpTarget, result.positionHome + POLLER_MIN_POSITION_GUARD,
+                                  POLLER_POSITION_MAX);
+  result.positionDownTarget = clamp(result.positionDownTarget, POLLER_POSITION_MIN,
+                                    result.positionHome - POLLER_MIN_POSITION_GUARD);
+
+  const bool positionsValid = result.positionDownTarget < result.positionHome &&
+                              result.positionHome < result.positionUpTarget;
+  if (!positionsValid) {
+    result.positionHome = DEFAULT_POLLER_PARAMETERS.positionHome;
+    result.positionUpTarget = DEFAULT_POLLER_PARAMETERS.positionUpTarget;
+    result.positionDownTarget = DEFAULT_POLLER_PARAMETERS.positionDownTarget;
+  }
+
+  const int32_t downRange = result.positionHome - result.positionDownTarget;
+  const int32_t maxMargin = (downRange > POLLER_MIN_POSITION_GUARD)
+                                ? (downRange - POLLER_MIN_POSITION_GUARD)
+                                : POLLER_MIN_ARM_MARGIN;
+  if (result.downArmMargin < POLLER_MIN_ARM_MARGIN) {
+    result.downArmMargin = POLLER_MIN_ARM_MARGIN;
+  }
+  if (result.downArmMargin > maxMargin) {
+    result.downArmMargin = maxMargin;
+  }
+
   return result;
 }
 

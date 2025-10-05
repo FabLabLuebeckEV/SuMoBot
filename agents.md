@@ -2,56 +2,49 @@
 
 ## Repository Snapshot
 - Branch: `feature/readme-funktionen`
-- PlatformIO project mit zwei Targets (`env:poller`, `env:pult`) auf gemeinsamer Codebasis.
-- Layout:
-  - `src/common/` ESP-NOW-/Utility-Code.
-  - `src/poller/` Poller-Firmware (Stepper, LED-Orchestrierung, Status).
-  - `src/pult/` Pult-Firmware (MatchOrchestrator, Webserver, LCD).
-  - `include/` Hardware- und Protokoll-Header (`hardware_config.h`, `comms/`, `pult/`).
-  - `data/` LittleFS-Weboberfläche des Pults.
-- PlatformIO CLI liegt unter `~/.local/bin/pio` (Pfad vorhanden).
+- PlatformIO-Projekt mit zwei Targets auf gemeinsamer Codebasis (`env:poller`, `env:pult`).
+- Wichtige Verzeichnisse:
+  - `src/common/` transport-/utility-Code (UDP-Link, shared helpers)
+  - `src/poller/` Poller-Firmware (Stepper, LED-Controller, Status)
+  - `src/pult/` Pult-Firmware (MatchOrchestrator, Webserver, LCD)
+  - `include/` Hardware-/Protokoll-Header
+  - `data/` LittleFS-Weboberfläche für das Pult
+- Historische Verzeichnisse (`legacy/`, `ArenaSumoBot/`, `PultSuMoBot/`) wurden entfernt.
 
-## Build & Deploy
-- Poller bauen: `pio run -e poller`
-- Pult bauen: `pio run -e pult`
-- Webassets hochladen: `pio run -t uploadfs -e pult`
-- Firmware flashen via Standard-PlatformIO-Upload oder externes Tool.
+## Build & Tooling
+- PlatformIO CLI via `pipx install platformio` verfügbar (`~/.local/bin/pio` liegt auf dem PATH).
+- Builds:
+  - Poller: `pio run -e poller`
+  - Pult: `pio run -e pult`
+  - Pult-Webassets: `pio run -t uploadfs -e pult`
+- Standard-Upload über PlatformIO oder externes Tool; nach größeren LED-Änderungen beide Targets flashen.
 
 ## Runtime Essentials
-- Poller kalibriert beim Start automatisch (fährt hoch, setzt HOME) und verweigert Abwärtskommando solange keine gültige Referenz vorliegt.
-- Bewegungs-/Timing-Parameter liegen in `hardware::PollerParameters`, werden im EEPROM persistiert und sind über das Pult-Web-UI (Sektion „Poller Parameter“) editierbar; Übertragung via ESP-NOW `kSetParameter`.
-- `/api/status` liefert unter `config` die aktuellen Parameter sowie unter `ping` Latenz/Health der Verbindung.
-- Pult sendet alle 5 s einen `kPing`; Poller antwortet implizit im Status. UI zeigt Alter/Status.
+- Poller kalibriert beim Start (Homing nach oben) und blockiert Down-Kommandos bis eine Referenz gesetzt ist.
+- Bewegungs-/Timing-Parameter in `hardware::PollerParameters`; Änderungen via Web-UI (`/api/command?type=updateConfig`) → im EEPROM persistiert.
+- Pult↔Poller-Kommunikation läuft über UDP (Port `42142`) mit Broadcast-Autodiscovery; Status enthält aktuelle Parameter + Ping-Antworten.
+- Pult sendet alle 5 s `kPing`; Poller spiegelt das in `PollerStatus.lastCommandId` für Latenz-Monitoring.
 
-## LED-Choreografie (Poller)
-- Läuft in `LedController` auf eigenem FreeRTOS-Task (Core 0, ~8 ms Zyklus). `FastLED.show()` wird max. alle 16 ms ausgeführt, sodass die Stepper-Zyklen unbeeinflusst bleiben.
-- **Init:** Komplette Beleuchtung blau (~2 s), anschließend Übergang zu Idle.
-- **Idle:** Arena mit Regenbogenlauf; Rundum schwach blau solange Poller nicht vollständig unten. Poller-Ringe: blau, wenn Poller oben, sonst dunkel.
-- **Countdown:** Orange/rote Blinksequenz über alle Segmente bis Countdown-Ende.
-- **Match:** Arena bleibt grün; Rundum folgt (grün aktiv, solange Poller nicht unten); Poller-Ringe spiegeln die Arenafarbe.
-- **Stop/Timeout:** Gesamtes System blinkt rot, bis wieder Idle erreicht wird.
-- **Überfahrt armed:** Poller zeigt Lauflicht außen→innen über die vier Ringe (8/12/16/24 LEDs), solange Überfahrt aktiv und kein Cooldown läuft.
-- **Überfahrt ausgelöst:** Sensor-Low triggert Overrun-Animation außen→innen; bleibt aktiv, bis Poller wieder ganz oben und Sensor frei → danach Poller-Ringe blau.
-- **Manuelle Fahrten:** Während manueller `Move*`/`Limit`-Kommandos werden Spezialanimationen ausgesetzt, Poller zeigt Match-Farbe bzw. bleibt aus; nach Bewegung kehrt passender Zustand zurück.
+## LED Controller Highlights (Poller)
+- Läuft als FreeRTOS-Task auf Core 0 (~8 ms Loop). `FastLED.show()` throttelt auf ≥16 ms.
+- FastLED nutzt den ESP32 I2S/DMA-Treiber (`FASTLED_ESP32_I2S`, 4 DMA-Buffers, RMT4 erzwingen) und deaktivierte Dithering.
+- Szenen:
+  - Init: alles blau (~2 s)
+  - Idle: Arena-Regenbogen, Rundum blau (solange Poller nicht unten)
+  - Countdown: Orange/Rot-Blinken
+  - Match: Arena grün, Rundum spiegelt Status
+  - Stop/Timeout: Rotblink global
+  - Überfahrt armed/triggered: Lauflicht bzw. Wellenanimation auf Poller-Ringen
+  - Manuelle Moves: Spezialanimationen pausieren
 
-## Kommunikation / Matchsteuerung
-- `MatchOrchestrator` bedient Countdown, Match-Start, Poller-Überfahrt (automatisches Hochfahren, Animation trigger).
-- PollerCommander validiert Kommandos gegen Kalibrier-/Cooldown-Status; `kMove*` Kommandos setzen `manualControlActive_` zur LED-Synchronisation.
+## Kommunikation & Matchsteuerung
+- `MatchOrchestrator` steuert Countdown, Matchphasen, Auto-Lower und Webhooks.
+- Poller akzeptiert Kommandos nur, wenn Kalibrier- und Cooldown-Status es erlauben.
+- Status-Flags: `kOverrunArmed`, `kCooldownActive`, `kPollerSensorActive`, `kOverrunDetected`, `kLinkLowQuality`, `kCommandError` (sticky).
 
-## Zustands-/Flag-Hinweise
-- Status-Flags: `kOverrunArmed` nur aktiv, wenn Poller unten und kein Cooldown läuft; `kCooldownActive` ansonsten gesetzt.
-- Poller-Sensor latched hängt, bis Poller wieder oben und Sensor frei.
-- Pult-Webstatus zeigt `ageMs` (Zeit seit letztem Status) sowie Ping-Infos.
-
-## Test / Troubleshooting
-- Nach Parameteränderungen Kalibrierung triggern, damit Stepper neue Home-Basis übernimmt.
-- Bei LED-Regressionen: `LedController::applyInputs` befüllt die State-Maschine; prüfen, ob `manualControlActive_` korrekt gesetzt wird.
-- Für Netzwerktests: Ping-Anzeige im Web-UI beobachten; sollte sich alle ~5 s aktualisieren.
-
-## Aktueller Stand (Webhook & Delay)
-- Web-UI: neues Feld **Status Endpoint (Basis-URL)** plus Checkbox **Poller Delay aktiv**. Poller Delay default 3000 ms, Webhooks initial auf `http://10.124.42.5:5000/` gesetzt.
-- Events senden optional `POST` auf `/queues/queue?name=SuMo:<Action>` mit Actions `MatchStart`, `MatchStop`, `CountdownStart`, `PollerUp`, `PollerDown`, `PollerOverrun`.
-- Delay-Logik: Überfahrt hält Puls-Animation bis `Poller Delay` abläuft, dann Raise. Kein automatisches Re-Arming im Poller-Loop – das übernimmt die Orchestrierung nach dem Hochfahren.
-- Defaults: Cooldown 20000 ms, Poller Delay 3000 ms (Checkbox aktiv). Werte werden über `/api/command?type=updateConfig` gespeichert.
-
-Happy hacking!
+## Troubleshooting
+- Nach Parameteränderungen Kalibrierung erneut anstoßen.
+- Poller fährt nie unter `positionDownTarget`; Werte werden in `hardware::sanitized` geklemmt, Stepper-Targets werden im Controller geclamped.
+- LED-Fehler: prüfen, ob Task läuft (`LedController`-Logs) und ob `manualControlActive_` korrekt gesetzt wird.
+- Netzwerk: UDP-Status (`ageMs`) im Web-UI beobachten; Broadcast greift, falls keine statischen IPs konfiguriert.
+- Bei LED-Flackern: sicherstellen, dass beide Targets mit aktuellem FastLED-I2S-Build geflasht sind.

@@ -9,13 +9,33 @@
 namespace pult {
 
 namespace {
-bool isMacConfigured(const uint8_t mac[6]) {
-  for (int i = 0; i < 6; ++i) {
-    if (mac[i] != 0x00) {
-      return true;
+bool isBroadcastAddress(const uint8_t mac[6]) {
+  if (!mac) {
+    return false;
+  }
+  for (int i = 0; i < 4; ++i) {
+    if (mac[i] != 0xff) {
+      return false;
     }
   }
-  return false;
+  return true;
+}
+
+bool isMacConfigured(const uint8_t mac[6]) {
+  if (!mac) {
+    return false;
+  }
+  bool anyNonZero = false;
+  for (int i = 0; i < 6; ++i) {
+    if (mac[i] != 0x00) {
+      anyNonZero = true;
+      break;
+    }
+  }
+  if (!anyNonZero) {
+    return false;
+  }
+  return !isBroadcastAddress(mac);
 }
 }
 
@@ -25,26 +45,28 @@ void PultController::begin() {
   instance_ = this;
 
   if (!comms::beginEspNow()) {
-    Serial.println("ESP-NOW initialisation failed");
+    Serial.println("UDP link initialisation failed");
+  } else {
+    Serial.println("UDP link ready");
   }
 
   comms::setReceiveHandler(&PultController::onEspNowReceive);
   comms::setSendHandler(nullptr);
 
-  if (isMacConfigured(comms::POLLER_MAC)) {
-    memcpy(pollerAddress_, comms::POLLER_MAC, sizeof(pollerAddress_));
-    comms::addPeer(pollerAddress_);
-    pollerKnown_ = true;
+  memcpy(pollerAddress_, comms::POLLER_MAC, sizeof(pollerAddress_));
+  comms::addPeer(pollerAddress_);
+  pollerKnown_ = isMacConfigured(pollerAddress_);
+  if (!pollerKnown_) {
+    Serial.println("Waiting for poller discovery (broadcast)");
   }
 
-  if (isMacConfigured(comms::OBSERVER_MAC)) {
-    memcpy(observerAddress_, comms::OBSERVER_MAC, sizeof(observerAddress_));
-    comms::addPeer(observerAddress_);
-    observerKnown_ = true;
-  }
+  memcpy(observerAddress_, comms::OBSERVER_MAC, sizeof(observerAddress_));
+  comms::addPeer(observerAddress_);
+  observerKnown_ = isMacConfigured(observerAddress_);
 }
 
 void PultController::loop() {
+  comms::pump();
   const uint32_t now = millis();
   tickPing(now);
 }
@@ -137,20 +159,16 @@ bool PultController::sendObserverMessage(const char* text) {
     return false;
   }
 
-  if (!observerKnown_) {
-    Serial.println("Observer MAC unknown. Cannot send observer message.");
-    return false;
-  }
-
   struct TextPacket {
     char text[32];
   } packet{};
   strncpy(packet.text, text, sizeof(packet.text) - 1);
   packet.text[sizeof(packet.text) - 1] = '\0';
 
-  bool sent = comms::sendTo(observerAddress_, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+  const uint8_t* target = observerKnown_ ? observerAddress_ : comms::OBSERVER_MAC;
+  bool sent = comms::sendTo(target, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
   if (!sent) {
-    Serial.println("Failed to send observer ESP-NOW message");
+    Serial.println("Failed to send UDP observer message");
   }
   return sent;
 }
@@ -168,11 +186,6 @@ uint32_t PultController::lastStatusTimestamp() const {
 }
 
 bool PultController::sendCommand(const comms::PollerCommand& commandTemplate, uint8_t* outCommandId) {
-  if (!pollerKnown_) {
-    Serial.println("Poller MAC unknown. Cannot send command.");
-    return false;
-  }
-
   comms::PollerCommand command = commandTemplate;
   if (++commandCounter_ == 0) {
     commandCounter_ = 1;
@@ -182,9 +195,10 @@ bool PultController::sendCommand(const comms::PollerCommand& commandTemplate, ui
     *outCommandId = command.commandId;
   }
 
-  bool sent = comms::sendTo(pollerAddress_, reinterpret_cast<const uint8_t*>(&command), sizeof(command));
+  const uint8_t* target = pollerKnown_ ? pollerAddress_ : comms::POLLER_MAC;
+  bool sent = comms::sendTo(target, reinterpret_cast<const uint8_t*>(&command), sizeof(command));
   if (!sent) {
-    Serial.println("Failed to send ESP-NOW command");
+    Serial.println("Failed to send UDP command");
   }
   return sent;
 }
@@ -220,9 +234,6 @@ void PultController::handleStatus(const comms::PollerStatus& status, const uint8
 }
 
 void PultController::tickPing(uint32_t now) {
-  if (!pollerKnown_) {
-    return;
-  }
   if ((now - lastPingMs_) >= 5000) {
     sendPing(now);
   }

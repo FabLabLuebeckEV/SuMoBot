@@ -37,7 +37,7 @@ class PollerController {
   bool cooldownWasActive_ = false;
   bool hasPeer_ = false;
   uint8_t pultAddress_[6] = {0};
-  int8_t lastRssi_ = -127;
+  int8_t lastRssi_ = 0;
   float emaRssi_ = NAN;
   hardware::PollerParameters config_ = hardware::DEFAULT_POLLER_PARAMETERS;
   bool manualControlActive_ = false;

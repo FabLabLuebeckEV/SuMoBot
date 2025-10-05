@@ -61,9 +61,11 @@ uint8_t clampBrightness(int value) {
 }  // namespace
 
 void LedController::begin() {
-  FastLED.addLeds<WS2812B, static_cast<int>(hardware::PIN_LED_RUNDUM), RGB>(ledsRundum_, hardware::LEDS_RUNDUM);
-  FastLED.addLeds<WS2812B, static_cast<int>(hardware::PIN_LED_ARENA), RGB>(ledsArena_, hardware::LEDS_ARENA);
-  FastLED.addLeds<WS2812B, static_cast<int>(hardware::PIN_LED_POLLER), GRB>(ledsPoller_, hardware::LEDS_POLLER);
+  FastLED.addLeds<WS2812, static_cast<int>(hardware::PIN_LED_RUNDUM), RGB>(ledsRundum_, hardware::LEDS_RUNDUM);
+  FastLED.addLeds<WS2812, static_cast<int>(hardware::PIN_LED_ARENA), RGB>(ledsArena_, hardware::LEDS_ARENA);
+  FastLED.addLeds<WS2812, static_cast<int>(hardware::PIN_LED_POLLER), GRB>(ledsPoller_, hardware::LEDS_POLLER);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, 6000);
+  FastLED.setDither(0);
 
   resetStrips(CRGB::Blue);
   FastLED.show();

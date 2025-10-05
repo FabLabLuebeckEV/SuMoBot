@@ -4,9 +4,12 @@
 #include <math.h>
 #include <string.h>
 
+#include <WiFi.h>
+
 #include "comms/peer_config.h"
 #include "common/espnow_link.h"
 #include "hardware_config.h"
+#include "network_config.h"
 #include "poller/logging.h"
 #include "poller_settings.h"
 
@@ -151,6 +154,23 @@ void PollerController::begin() {
 
   POLLER_LOG_PRINTLN("[Poller] Initialising poller controller");
 
+  POLLER_LOG_PRINTLN("[Poller] Connecting to WiFi");
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(network::WIFI_SSID, network::WIFI_PASSWORD);
+
+  const uint32_t wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - wifiStart) < 15000) {
+    delay(250);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    const IPAddress ip = WiFi.localIP();
+    POLLER_LOG_PRINTF("[Poller] WiFi connected: %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3]);
+  } else {
+    POLLER_LOG_PRINTLN("[Poller] WiFi connection failed");
+  }
+
   pinMode(static_cast<uint8_t>(hardware::PIN_POLLER_SENSOR), INPUT);
   pollerSensorLatched_ = digitalRead(static_cast<uint8_t>(hardware::PIN_POLLER_SENSOR)) == LOW;
   overrunLatched_ = false;
@@ -184,14 +204,14 @@ void PollerController::begin() {
   status_.activeAnimation = comms::AnimationId::kNone;
   status_.lastCommandId = 0;
   status_.statusFlags = 0;
-  status_.lastRssi = -127;
-  status_.emaRssi = -127;
+  status_.lastRssi = 0;
+  status_.emaRssi = 0;
   status_.config = config_;
 
   if (!comms::beginEspNow()) {
-    POLLER_LOG_PRINTLN("[Poller] ESP-NOW initialisation failed");
+    POLLER_LOG_PRINTLN("[Poller] UDP link initialisation failed");
   } else {
-    POLLER_LOG_PRINTLN("[Poller] ESP-NOW initialised");
+    POLLER_LOG_PRINTLN("[Poller] UDP link ready");
   }
 
   comms::setReceiveHandler(&PollerController::onEspNowReceive);
@@ -199,13 +219,14 @@ void PollerController::begin() {
 
   comms::addPeer(comms::PULT_MAC);
   memcpy(pultAddress_, comms::PULT_MAC, sizeof(pultAddress_));
-  hasPeer_ = true;
-  POLLER_LOG_PRINTLN("[Poller] Default peer configured");
+  hasPeer_ = false;
+  POLLER_LOG_PRINTLN("[Poller] Default peer set to broadcast");
 
   publishStatus(true, kReasonStartup);
 }
 
 void PollerController::loop() {
+  comms::pump();
   stepper_.update();
 
   const bool endstopEvent = stepper_.consumeEndstopEvent();
